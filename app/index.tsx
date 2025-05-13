@@ -10,18 +10,41 @@ export default function Index() {
     if (!text.trim()) {
       return "";
     }
-    console.log("Placeholder API CALL: Translating to Yoruba");
-  
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 500)); // Reduced delay slightly
-    // Restore placeholder logic
-    if (text.trim().toLowerCase() === "hello") {
-      return "Bawo";
+    const endpoint = "https://e06e-34-135-191-170.ngrok-free.app/translate";
+    console.log(`API CALL: Translating "${text}" to Yoruba using ${endpoint}`);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Add any other necessary headers here, like an API key if required
+          // 'Authorization': 'Bearer YOUR_API_KEY',
+        },
+        body: JSON.stringify({
+          text: text,       // The text to translate
+          source_lang: 'EN', // Source language
+          target_lang: 'YO', // Target language (Yoruba)
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text(); // Or response.json() if error details are in JSON
+        console.error("API Error Response:", errorData);
+        throw new Error(`API request failed: ${response.status} - ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      // Adjust this based on the actual structure of your API's response
+      // For example, if the translated text is in data.translation or data.data.translations[0].translatedText
+      const translatedText = data.translated_text || data.translation;
+
+      return translatedText || `Error: Could not find translation in response for "${text}"`;
+    } catch (error) {
+      console.error("Error during translation API call:", error);
+      return `Error translating: ${error instanceof Error ? error.message : "Unknown error"}`;
     }
-    if (text.trim().toLowerCase() === "how are you?") {
-      return "Ṣe dáadáa ni?";
-    }
-    return `Yoruba translation for: "${text}" (API integration removed)`;
   };
 
   
