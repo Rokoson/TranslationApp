@@ -9,14 +9,14 @@ export default function HomeScreen() {
       <Text style={styles.title}>Welcome to the Translator App!</Text>
       <Text style={styles.subtitle}>Choose an option:</Text>
 
-      <Link href="/textTranslator" asChild>
+      <Link href="/index" asChild>
         <Pressable style={styles.navButton}>
           <Text style={styles.navButtonText}>Text Translation</Text>
         </Pressable>
       </Link>
 
       <Link href="/imageCaption" asChild>
-        <Pressable style={styles.navButton}>
+        <Pressable style={[styles.navButton, styles.secondaryButton]}>
           <Text style={styles.navButtonText}>Visual Dictionary (Image Caption)</Text>
         </Pressable>
       </Link>
@@ -26,16 +26,22 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: {
-    flexGrow: 1,
+    flex: 1,
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
+    backgroundColor: '#f5f5f5',
   },
   title: {
     fontSize: 26,
     fontWeight: "bold",
-    marginBottom: 20,
+    marginBottom: 10,
     textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: 18,
+    marginBottom: 30,
+    color: '#555',
   },
   navButton: {
     backgroundColor: '#007AFF',
@@ -46,18 +52,12 @@ const styles = StyleSheet.create({
     width: '80%',
     alignItems: 'center',
   },
-  subtitle: {
-    fontSize: 18,
-    marginBottom: 30,
-    color: '#555',
+  secondaryButton: {
+    backgroundColor: '#4CAF50', // A different color for the second button
   },
   navButtonText: {
     color: 'white',
     fontSize: 18,
     fontWeight: 'bold',
-  },
+  }
 });
-
-// Note: The original content of this file (Text Translator screen)
-// was moved to /Users/davidolagunju/Projects/React-Native/TranslationApp/app/textTranslator.tsx
-// This file now contains the HomeScreen.
