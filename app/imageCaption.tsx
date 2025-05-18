@@ -1,184 +1,268 @@
+import { DictionaryImage, getDictionaryImages, getTotalDictionaryImagesCount, initDatabase } from "@/src/services/databaseService"; // Import DB service
 import { translateToYorubaAPI } from "@/src/services/translationApiService";
 import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
 import { Audio } from 'expo-av';
-import * as ImagePicker from 'expo-image-picker';
-import { Link, Stack } from "expo-router"; // Keep Stack if you want to set screen options here
+import { Stack } from "expo-router"; // Removed Link as it's not used in this version
 import React, { useEffect, useRef, useState } from "react";
-import { Alert, Button, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Alert, Button, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 // Ensure these images exist in /Users/davidolagunju/Projects/React-Native/TranslationApp/assets/images/
 const catImage = require('@/assets/images/animals_cat.png');
-const birdImage = require('@/assets/images/animals_bird.png'); // Example: Add this image
-const dogImage = require('@/assets/images/animals_dog.png'); 
-const earsImage = require('@/assets/images/body_parts_ears.png'); //
-const handsImage = require('@/assets/images/body_parts_hands.png'); //
+const birdImage = require('@/assets/images/animals_bird.png');
+const dogImage = require('@/assets/images/animals_dog.png');
+const earsImage = require('@/assets/images/body_parts_ears.png');
+const handsImage = require('@/assets/images/body_parts_hands.png');
 
 
-const localGalleryImages = [
-  { id: 'cat', source: catImage, apiIdentifier: 'local_gallery_cat_image', name: 'Cat' },
-  { id: 'bird', source: birdImage, apiIdentifier: 'local_gallery_bird_image', name: 'Bird' },
-  { id: 'dog', source: dogImage, apiIdentifier: 'local_gallery_dog_image', name: 'Dog' },
-  { id: 'ears', source: earsImage, apiIdentifier: 'local_gallery_ears_image', name: 'Ears'},
-  { id: 'hands', source: handsImage, apiIdentifier: 'local_gallery_hands_image', name: 'Hands'},
+// Map image keys (from DB) to their required sources
+const allImageSources: Record<string, number> = {
+  'cat': catImage,
+  'bird': birdImage,
+  'dog': dogImage,
+  'ears': earsImage,
+  'hands': handsImage,
+  // Ensure this map aligns with image_key in your databaseService.ts initialDictionaryData
+  // and that the corresponding image files exist and are required above.
+};
 
-  // Add more images here. Make sure the files exist and are required above.
-];
 
 // --- Mock Image Captioning Service ---
-// In a real app, this would call an actual image captioning API.
-// It would likely take the image URI or base64 data as input.
-const mockGetEnglishCaptionAPI = async (apiId: string): Promise<string> => {
-  console.log("ImageCaptionAPI: Getting English caption for identifier:", apiId);
+// This mock API is now ONLY for images picked from the device gallery (URIs).
+// Captions for local gallery images will come directly from the database.
+const mockGetEnglishCaptionAPI = async (imageUri: string): Promise<string> => {
+  console.log("ImageCaptionAPI: Getting English caption for device image URI:", imageUri);
   return new Promise(resolve => {
     setTimeout(() => {
-      let englishCaption: string;
-      const localPrefix = "local_gallery_";
-      const localSuffix = "_image";
-
-      if (apiId.startsWith(localPrefix) && apiId.endsWith(localSuffix)) {
-        // Extract the core name from identifiers like "local_gallery_cat_image" -> "cat"
-        const coreName = apiId.substring(localPrefix.length, apiId.length - localSuffix.length);
-        if (coreName) {
-          // Use the core name directly without capitalization
-          englishCaption = coreName;
-        } else {
-          englishCaption = "Error: Could not parse local image name.";
-        }
-      } else {
-        // This is likely an image picked from the device gallery (URI)
-        // For now, return a generic caption. A real API would be called here for actual captioning.
-        // You could also keep the random captions if you prefer for picked images.
-        englishCaption = "This image was selected from your device gallery.";
-        // Example of keeping random captions for picked images:
-        // const randomCaptions = ["A photo from the gallery.", "User-selected image.", "A picture from device."];
-        // englishCaption = randomCaptions[Math.floor(Math.random() * randomCaptions.length)];
-      }
+      // For images picked from the device gallery (URI)
+      const captions = [
+        "A photo from your gallery.",
+        "User-selected image.",
+        "An interesting picture from your device."
+      ];
+      const englishCaption = captions[Math.floor(Math.random() * captions.length)];
       resolve(englishCaption);
     }, 250); // Shorter delay for quicker feedback
   });
 };
 // --- End Mock Service ---
 
+const IMAGES_PER_PAGE = 5;
+
 export default function ImageCaptionScreen() {
+  const [galleryDbItems, setGalleryDbItems] = useState<DictionaryImage[]>([]);
   // selectedImageSource can be a number (from require()) or an ImagePickerAsset (from device gallery)
-  const [selectedImageSource, setSelectedImageSource] = useState<ImagePicker.ImagePickerAsset | number | null>(
-    localGalleryImages.length > 0 ? localGalleryImages[0].source : null
+  const [selectedImageSource, setSelectedImageSource] = useState<number | null>( // Simplified type
+    null
   );
-  // currentApiIdentifier will be the string passed to the mock API
-  // It's either a URI from ImagePicker or a custom identifier for local images
   const [currentApiIdentifier, setCurrentApiIdentifier] = useState<string | null>(
-    localGalleryImages.length > 0 ? localGalleryImages[0].apiIdentifier : null
+    null
   );
 
   const [englishCaption, setEnglishCaption] = useState<string>("");
   const [yorubaCaption, setYorubaCaption] = useState<string>("");
   
   // Loading states
-  const [isLoadingImage, setIsLoadingImage] = useState<boolean>(false);
   const [isLoadingCaption, setIsLoadingCaption] = useState<boolean>(false);
   const [isLoadingTranslation, setIsLoadingTranslation] = useState<boolean>(false);
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [currentPage, setCurrentPage] = useState<number>(0);
+  const [totalImageCount, setTotalImageCount] = useState<number>(0);
+  const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
+
 
   const soundRef = useRef<Audio.Sound | null>(null);
 
   useEffect(() => {
-    // Request media library permissions
-    (async () => {
-      if (Platform.OS !== 'web') {
-        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permission Denied', 'Sorry, we need camera roll permissions to make this work!');
-        }
-      }
-    })();
+    console.log("[ImageCaptionScreen] useEffect - MOUNTED");
 
-    // Audio configuration
-    const configureAudio = async () => {
+    const initializeScreen = async () => {
+      // 1. Media library permissions request removed as "Pick Image" is removed.
+      // console.log("[ImageCaptionScreen] Requesting media library permissions...");
+      // if (Platform.OS !== 'web') {
+      //   const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      //   if (status !== 'granted') {
+      //     Alert.alert('Permission Denied', 'Sorry, we need camera roll permissions to make this work!');
+      //     // You might want to handle the case where permission is denied,
+      //     // e.g., by disabling image picking functionality or returning early.
+      //   }
+      // }
+      // console.log("[ImageCaptionScreen] Media library permissions checked.");
+      console.log("[ImageCaptionScreen] Media library permissions request skipped as 'Pick Image' is removed.");
+
+      // 2. Audio configuration
+      console.log("[ImageCaptionScreen] Configuring audio mode...");
+      // --- Add these logs for inspection ---
+      console.log("[ImageCaptionScreen] Inspecting Audio object:", JSON.stringify(Audio, null, 2));
+      console.log("[ImageCaptionScreen] Audio.InterruptionModeIOS:", Audio.InterruptionModeIOS);
+      console.log("[ImageCaptionScreen] Audio.InterruptionModeAndroid:", Audio.InterruptionModeAndroid);
+
+      // Determine interruption modes with fallbacks
+      const interruptionModeIOSValue = Audio.InterruptionModeIOS?.DoNotMix ?? 1;
+      const interruptionModeAndroidValue = Audio.InterruptionModeAndroid?.DoNotMix ?? 1;
+
+      if (Audio.InterruptionModeIOS?.DoNotMix === undefined) {
+        console.warn("[ImageCaptionScreen] Audio.InterruptionModeIOS.DoNotMix is undefined. Using fallback value 1.");
+      }
+      if (Audio.InterruptionModeAndroid?.DoNotMix === undefined) {
+        console.warn("[ImageCaptionScreen] Audio.InterruptionModeAndroid.DoNotMix is undefined. Using fallback value 1.");
+      }
+
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
-          interruptionModeIOS: 1,
+          interruptionModeIOS: interruptionModeIOSValue,
           shouldDuckAndroid: true,
-          interruptionModeAndroid: 1,
+          interruptionModeAndroid: interruptionModeAndroidValue,
           playThroughEarpieceAndroid: false,
         });
+        console.log("[ImageCaptionScreen] Audio mode configured successfully.");
       } catch (e) {
-        console.error("Failed to set audio mode on ImageCaptionScreen", e);
+        // The error 'e' will contain more details about why it failed.
+        // Check your console for the full error object.
+        console.error("Failed to set audio mode on ImageCaptionScreen. Error details:", e);
       }
-    };
-    configureAudio();
 
-    // Fetch caption for the initially selected gallery image (if any)
-    if (currentApiIdentifier && !englishCaption && !isLoadingCaption && !isLoadingTranslation) {
-      fetchCaptionAndTranslate(currentApiIdentifier);
-    }
+      // 3. Initialize DB and load initial set of images
+      console.log("[ImageCaptionScreen] Loading initial data...");
+      try {
+        setIsInitialLoading(true);
+        await initDatabase();
+        const count = await getTotalDictionaryImagesCount();
+        console.log('[ImageCaptionScreen] Total image count from DB:', count);
+        setTotalImageCount(count);
+
+        const initialItems = await getDictionaryImages(IMAGES_PER_PAGE, 0);
+        console.log('[ImageCaptionScreen] Initial items from DB:', JSON.stringify(initialItems, null, 2));
+        setGalleryDbItems(initialItems);
+        setCurrentPage(0);
+
+        if (initialItems.length > 0) {
+          // Select the first image from the initial set by default
+          const firstItem = initialItems[0];
+          console.log('[ImageCaptionScreen] First item from DB:', JSON.stringify(firstItem, null, 2));
+          console.log('[ImageCaptionScreen] First item image_key:', firstItem.image_key);
+
+          const imageResource = allImageSources[firstItem.image_key];
+          console.log(`[ImageCaptionScreen] Looking up image_key "${firstItem.image_key}" in allImageSources. Result:`, imageResource);
+
+          if (allImageSources[firstItem.image_key]) {
+            setSelectedImageSource(allImageSources[firstItem.image_key]);
+            setCurrentApiIdentifier(firstItem.image_key);
+            console.log('[ImageCaptionScreen] setSelectedImageSource with:', allImageSources[firstItem.image_key], 'and calling fetchCaptionAndTranslate for', firstItem.image_key);
+            await fetchCaptionAndTranslate(firstItem.image_key, firstItem.english_caption);
+          } else {
+            console.warn(`[ImageCaptionScreen] Image key "${firstItem.image_key}" (asset: ${firstItem.asset_filename || 'N/A'}) NOT FOUND in allImageSources map. Cannot display initial image.`);
+             // Optionally select nothing or a generic placeholder
+            setSelectedImageSource(null);
+            setCurrentApiIdentifier(null);
+            setEnglishCaption("Default image shown. Select from gallery or check image data.");
+            setYorubaCaption(""); // Clear Yoruba caption
+          } // Closes: if (allImageSources[firstItem.image_key])
+        } else {
+          console.log('[ImageCaptionScreen] No initial items found in DB.');
+          setSelectedImageSource(null);
+          setCurrentApiIdentifier(null);
+          setEnglishCaption("No images in local gallery. Pick an image or add to dictionary.");
+          setYorubaCaption("");
+        } // Closes: if (initialItems.length > 0)
+      } catch (error) {
+        console.error("Failed to load data from database:", error);
+        Alert.alert("Error", "Could not load image dictionary. " + (error instanceof Error ? error.message : String(error)));
+        setEnglishCaption("Error loading image dictionary.");
+        setYorubaCaption("");
+      } finally {
+        setIsInitialLoading(false);
+      }
+      console.log("[ImageCaptionScreen] Initialization complete.");
+    };
+    initializeScreen();
 
     return () => {
+      console.log("[ImageCaptionScreen] Unmounting component. Minimal sound cleanup will run.");
+      // Minimal, correct sound cleanup
       if (soundRef.current) {
-        soundRef.current.unloadAsync();
+        console.log("[ImageCaptionScreen] Sound object exists, attempting to unload (minimal cleanup).");
+        soundRef.current.setOnPlaybackStatusUpdate(null);
+        soundRef.current.unloadAsync()
+          .then(() => {
+            console.log("[ImageCaptionScreen] Minimal sound unloaded successfully during unmount.");
+            soundRef.current = null;
+          })
+          .catch(error => {
+            console.error("[ImageCaptionScreen] Minimal error unloading sound during unmount:", error);
+            soundRef.current = null;
+          })
+          .finally(() => console.log("[ImageCaptionScreen] Minimal unmount sound cleanup finished."));
       }
     };
   }, []);
 
-  const handlePickImage = async () => {
-    setIsLoadingImage(true);
-    // No need to reset selectedImageSource here, it will be overwritten or picker cancelled
-    setEnglishCaption("");
-    setYorubaCaption("");
-
+  const handleLoadMore = async () => {
+    if (isLoadingMore || galleryDbItems.length >= totalImageCount) {
+      return;
+    }
+    setIsLoadingMore(true);
+    const nextPage = currentPage + 1;
+    const offset = nextPage * IMAGES_PER_PAGE;
     try {
-      let result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
-        aspect: [4, 3],
-        quality: 1,
-      });
-
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const asset = result.assets[0];
-        setSelectedImageSource(asset); // Store the whole asset
-        setCurrentApiIdentifier(asset.uri); // Use URI for API
-        await fetchCaptionAndTranslate(asset.uri);
+      const newItems = await getDictionaryImages(IMAGES_PER_PAGE, offset);
+      if (newItems.length > 0) {
+        setGalleryDbItems(prevItems => [...prevItems, ...newItems]);
+        setCurrentPage(nextPage);
       }
     } catch (error) {
-      console.error("Image picking error:", error);
-      Alert.alert("Error", "Could not pick image.");
+      console.error("Failed to load more images:", error);
+      Alert.alert("Error", "Could not load more images.");
     } finally {
-      setIsLoadingImage(false);
+      setIsLoadingMore(false);
     }
   };
 
-  const handleSelectFromLocalGallery = async (item: typeof localGalleryImages[0]) => {
-    if (isLoadingCaption || isLoadingTranslation) return; // Don't change if already processing
+  const canLoadMoreImages = galleryDbItems.length < totalImageCount && !isLoadingMore;
 
-    setSelectedImageSource(item.source);
-    setCurrentApiIdentifier(item.apiIdentifier);
-    
-    // Reset captions and trigger fetch
-    setEnglishCaption("");
-    setYorubaCaption("");
-    await fetchCaptionAndTranslate(item.apiIdentifier);
+  // handlePickImage function removed
+
+  const handleSelectFromLocalGallery = async (item: DictionaryImage) => {
+    if (isLoadingCaption || isLoadingTranslation) return;
+
+    if (allImageSources[item.image_key]) {
+      setSelectedImageSource(allImageSources[item.image_key]);
+      setCurrentApiIdentifier(item.image_key); 
+      
+      setEnglishCaption("");
+      setYorubaCaption("");
+      await fetchCaptionAndTranslate(item.image_key, item.english_caption);
+    } else {
+      console.warn(`Image key "${item.image_key}" not found in allImageSources. Cannot select.`);
+      Alert.alert("Error", "Image resource not found for this item.");
+    }
   };
 
-  const fetchCaptionAndTranslate = async (apiId: string) => {
-    if (!apiId) return;
+  const fetchCaptionAndTranslate = async (identifier: string, preFetchedEngCaption?: string) => {
+    if (!identifier) return;
 
     setIsLoadingCaption(true);
     setEnglishCaption("");
     setYorubaCaption("");
     try {
-      // Log which identifier is being used (URI from picker or local gallery ID)
-      console.log("Fetching caption for API identifier:", apiId);
-      const engCaption = await mockGetEnglishCaptionAPI(apiId);
-      setEnglishCaption(engCaption);
+      let engCaption = preFetchedEngCaption;
+      
+      if (preFetchedEngCaption === undefined) {
+        console.log("Fetching caption via mock API for identifier:", identifier);
+        engCaption = await mockGetEnglishCaptionAPI(identifier);
+      } else {
+        console.log("Using pre-fetched caption for identifier:", identifier, preFetchedEngCaption);
+      }
+      setEnglishCaption(engCaption || ""); 
       
       if (engCaption && !engCaption.startsWith("Error:")) {
         setIsLoadingTranslation(true);
         const yorCaption = await translateToYorubaAPI(engCaption);
         setYorubaCaption(yorCaption);
       } else {
-        setYorubaCaption("Could not get English caption to translate.");
+        setYorubaCaption(engCaption ? "Could not translate English caption." : "No English caption to translate.");
       }
     } catch (error) {
       console.error("Captioning/Translation error:", error);
@@ -194,13 +278,15 @@ export default function ImageCaptionScreen() {
       return;
     }
     if (isSpeaking && soundRef.current) {
+      console.log("[ImageCaptionScreen] Stopping and unloading existing sound before playing new.");
       await soundRef.current.stopAsync();
+      soundRef.current.setOnPlaybackStatusUpdate(null); 
       await soundRef.current.unloadAsync();
       soundRef.current = null;
     }
     setIsSpeaking(true);
     try {
-      if (soundRef.current) {
+      if (soundRef.current) { // Ensure any previous sound object is fully gone
         await soundRef.current.unloadAsync();
         soundRef.current = null;
       }
@@ -214,16 +300,20 @@ export default function ImageCaptionScreen() {
               console.error(`Playback Error: ${status.error}`);
               setIsSpeaking(false);
               if (soundRef.current) {
+                soundRef.current.setOnPlaybackStatusUpdate(null);
                 await soundRef.current.unloadAsync();
                 soundRef.current = null;
+                console.log("[ImageCaptionScreen] Sound unloaded due to playback error.");
               }
             }
           } else {
             if (status.didJustFinish && !status.isLooping) {
               setIsSpeaking(false);
               if (soundRef.current) {
+                soundRef.current.setOnPlaybackStatusUpdate(null);
                 await soundRef.current.unloadAsync();
                 soundRef.current = null;
+                console.log("[ImageCaptionScreen] Sound unloaded after finishing playback.");
               }
             }
           }
@@ -237,65 +327,76 @@ export default function ImageCaptionScreen() {
       console.error("Error in handleSpeakYorubaCaption:", error);
       setIsSpeaking(false);
       if (soundRef.current) {
+        soundRef.current.setOnPlaybackStatusUpdate(null);
         await soundRef.current.unloadAsync();
         soundRef.current = null;
+        console.log("[ImageCaptionScreen] Sound unloaded in catch block of handleSpeakYorubaCaption.");
       }
     }
   };
 
-  let imageSourceForDisplay;
+  // Simplified imageSourceForDisplay logic as selectedImageSource is now only number | null
+  const imageSourceForDisplay: number | null = selectedImageSource;
+  // if (selectedImageSource) {
+  //   if (typeof selectedImageSource === 'number') { 
+  //     imageSourceForDisplay = selectedImageSource;
+  //   } else { // This branch is no longer reachable if ImagePicker is removed
+  //     imageSourceForDisplay = { uri: selectedImageSource.uri };
+  //   }
+  // }
   if (selectedImageSource) {
-    if (typeof selectedImageSource === 'number') { // From require()
-      imageSourceForDisplay = selectedImageSource;
-    } else { // From ImagePicker (ImagePicker.ImagePickerAsset)
-      imageSourceForDisplay = { uri: selectedImageSource.uri };
-    }
-  } else if (localGalleryImages.length > 0) {
-    // Fallback to first gallery image if selectedImageSource became null somehow
-    // and gallery is not empty
-    imageSourceForDisplay = localGalleryImages[0].source;
-  } else {
-    // Absolute fallback if gallery is empty and nothing selected
-    // You might want a more generic placeholder image here if localGalleryImages can be empty
-    imageSourceForDisplay = catImage; // Default to catImage or a specific placeholder
+    // imageSourceForDisplay is already set if selectedImageSource is a number
   }
-
-  const isProcessing = isLoadingImage || isLoadingCaption || isLoadingTranslation;
+  const isProcessing = isLoadingCaption || isLoadingTranslation; // isLoadingImage removed
   const canInteractWithGallery = !isProcessing;
-  const canPickImage = !isProcessing;
   const canPlaySound = !isSpeaking && yorubaCaption && !yorubaCaption.startsWith("Error:");
 
   return (
+    <>
+      {/* Optional: Display a loading indicator while initial data is loading */}
+      {isInitialLoading && (
+        <View style={styles.loadingOverlay}>
+          <Text>Loading Dictionary...</Text>
+        </View>
+      )}
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: "Image Caption Translator" }} />
-      <Text style={styles.title}>Image to Yoruba Caption</Text>
-
-      <Button 
-        title={isLoadingImage ? "Loading Image..." : "Pick an Image from Gallery"} 
-        onPress={handlePickImage} 
-        disabled={!canPickImage}
-      />
+      <Text style={styles.title}>Image Caption Screen</Text>
+      {/* "Pick an Image from Gallery" Button removed */}
 
       <Text style={styles.galleryTitle}>Or select from local gallery:</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.galleryScrollView}>
-        {localGalleryImages.map((item) => (
+        {galleryDbItems.map((item) => (
           <Pressable 
-            key={item.id} 
+            key={item.image_key} // Use image_key from DB as key
             onPress={() => handleSelectFromLocalGallery(item)}
             style={[
               styles.galleryItem, 
-              (typeof selectedImageSource === 'number' && selectedImageSource === item.source) && styles.galleryItemSelected,
+              currentApiIdentifier === item.image_key && styles.galleryItemSelected,
               !canInteractWithGallery && styles.galleryItemDisabled
             ]}
             disabled={!canInteractWithGallery}
           >
-            <Image source={item.source} style={styles.galleryImage} resizeMode="cover" />
+            {allImageSources[item.image_key] ? (
+              <Image source={allImageSources[item.image_key]} style={styles.galleryImage} resizeMode="cover" />
+            ) : (
+              <View style={[styles.galleryImage, styles.galleryImagePlaceholder]}>
+                <Text style={styles.galleryImagePlaceholderText}>?</Text>
+              </View>
+            )}
           </Pressable>
         ))}
       </ScrollView>
+      {canLoadMoreImages && (
+        <Button title={isLoadingMore ? "Loading..." : "Load More Images"} onPress={handleLoadMore} disabled={isLoadingMore} />
+      )}
 
       <View style={styles.imageContainer}>
-        <Image source={imageSourceForDisplay} style={styles.image} resizeMode="contain" />
+        {imageSourceForDisplay ? (
+          <Image source={imageSourceForDisplay} style={styles.image} resizeMode="contain" />
+        ) : (
+          <Text style={styles.noImageText}>No image selected or available.</Text>
+        )}
       </View>
 
       {isLoadingCaption && <Text style={styles.loadingText}>Getting English caption...</Text>}
@@ -314,16 +415,18 @@ export default function ImageCaptionScreen() {
           {canPlaySound && (
             <Button 
               title={isSpeaking ? "Playing..." : "🔊 Play Yoruba Caption"} 
-              onPress={handleSpeakYorubaCaption} 
-              disabled={isSpeaking || isProcessing} 
+              onPress={handleSpeakYorubaCaption}
+              disabled={isSpeaking || isProcessing}
             />
           )}
         </View>
       )}
        <View style={{ marginTop: 20 }}>
-        <Link href="/" style={styles.link}>Go back to Home</Link>
+        {/* Custom "Go Back to Home" button removed, relying on header back button */}
+        {/* <Link href="/" style={styles.link}>Go Back to Home</Link> */}
       </View>
     </ScrollView>
+    </>
   );
 }
 
@@ -331,11 +434,11 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     alignItems: "center",
-    padding: 20,
+    padding: 20, // Keep padding
   },
   title: {
     fontSize: 22,
-    fontWeight: "bold",
+    fontWeight: "bold", // Keep title style
     marginBottom: 20,
   },
   galleryTitle: {
@@ -357,7 +460,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     overflow: 'hidden', // Ensures image respects border radius
     alignItems: 'center',
-    // paddingBottom: 5, // No longer needed if text is removed, or adjust as preferred
+    // paddingBottom: 5, // Removed as thumbnail text is gone
   },
   galleryItemSelected: {
     borderColor: '#007AFF', // Highlight selected item
@@ -370,7 +473,17 @@ const styles = StyleSheet.create({
     width: 80, // Adjust as needed
     height: 80, // Adjust as needed
   },
-  // galleryItemText: { // Style is no longer needed
+  galleryImagePlaceholder: {
+    backgroundColor: '#e0e0e0',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  galleryImagePlaceholderText: {
+    fontSize: 24,
+    color: '#a0a0a0',
+  },
+
+  // galleryItemText: { // Style removed as text is gone from thumbnail
   //   fontSize: 12,
   //   marginTop: 4,
   // },
@@ -386,6 +499,11 @@ const styles = StyleSheet.create({
   image: {
     width: '100%',
     height: '100%',
+  },
+  noImageText: {
+    fontSize: 16,
+    color: '#888',
+    textAlign: 'center',
   },
   captionBox: {
     width: '100%',
@@ -409,5 +527,12 @@ const styles = StyleSheet.create({
     color: 'blue',
     textDecorationLine: 'underline',
     fontSize: 16,
-  }
+  },
+  loadingOverlay: { // Basic style for loading overlay, adjust as needed
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255, 255, 255, 0.8)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 10, // Ensure it's on top
+  },
 });

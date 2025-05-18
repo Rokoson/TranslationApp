@@ -1,9 +1,8 @@
 import { translateToYorubaAPI } from "@/src/services/translationApiService";
 import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
 import { Audio } from 'expo-av';
-import { Link } from "expo-router"; // Keep Stack if you want to set screen options here
 import React, { useEffect, useRef, useState } from "react";
-import { Button, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View } from "react-native";
+import { Button, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View } from "react-native";
 
 export default function TextTranslatorScreen() {
   const [englishText, setEnglishText] = useState("");
@@ -14,27 +13,58 @@ export default function TextTranslatorScreen() {
   const soundRef = useRef<Audio.Sound | null>(null);
 
   useEffect(() => {
+    console.log("[TextTranslatorScreen] useEffect - MOUNTED");
     const configureAudio = async () => {
+      console.log("[TextTranslatorScreen] Configuring audio mode...");
+      // --- Add these logs for inspection ---
+      console.log("[TextTranslatorScreen] Inspecting Audio object:", JSON.stringify(Audio, null, 2));
+      console.log("[TextTranslatorScreen] Audio.InterruptionModeIOS:", Audio.InterruptionModeIOS);
+      console.log("[TextTranslatorScreen] Audio.InterruptionModeAndroid:", Audio.InterruptionModeAndroid);
+
+      // Determine interruption modes with fallbacks
+      const interruptionModeIOSValue = Audio.InterruptionModeIOS?.DoNotMix ?? 1;
+      const interruptionModeAndroidValue = Audio.InterruptionModeAndroid?.DoNotMix ?? 1;
+
+      if (Audio.InterruptionModeIOS?.DoNotMix === undefined) {
+        console.warn("[TextTranslatorScreen] Audio.InterruptionModeIOS.DoNotMix is undefined. Using fallback value 1.");
+      }
+      if (Audio.InterruptionModeAndroid?.DoNotMix === undefined) {
+        console.warn("[TextTranslatorScreen] Audio.InterruptionModeAndroid.DoNotMix is undefined. Using fallback value 1.");
+      }
+
       try {
         await Audio.setAudioModeAsync({
           allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
-          interruptionModeIOS: 1, 
+          interruptionModeIOS: interruptionModeIOSValue,
           shouldDuckAndroid: true,
-          interruptionModeAndroid: 1, 
+          interruptionModeAndroid: interruptionModeAndroidValue,
           playThroughEarpieceAndroid: false,
         });
         console.log("Audio mode configured for TextTranslatorScreen.");
       } catch (e) {
-        console.error("Failed to set audio mode on TextTranslatorScreen", e);
+        console.error("Failed to set audio mode on TextTranslatorScreen. Error details:", e);
       }
     };
 
     configureAudio();
 
     return () => {
+      console.log("[TextTranslatorScreen] Unmounting component. Minimal sound cleanup will run.");
+      // Minimal, correct sound cleanup
       if (soundRef.current) {
-        soundRef.current.unloadAsync();
+        console.log("[TextTranslatorScreen] Sound object exists, attempting to unload (minimal cleanup).");
+        soundRef.current.setOnPlaybackStatusUpdate(null);
+        soundRef.current.unloadAsync()
+          .then(() => {
+            console.log("[TextTranslatorScreen] Minimal sound unloaded successfully during unmount.");
+            soundRef.current = null;
+          })
+          .catch(error => {
+            console.error("[TextTranslatorScreen] Minimal error unloading sound during unmount:", error);
+            soundRef.current = null;
+          })
+          .finally(() => console.log("[TextTranslatorScreen] Minimal unmount sound cleanup finished."));
       }
     };
   }, []);
@@ -62,12 +92,15 @@ export default function TextTranslatorScreen() {
     }
     if (isSpeaking && soundRef.current) {
       await soundRef.current.stopAsync();
+      soundRef.current.setOnPlaybackStatusUpdate(null); // Clear listener
+      console.log("[TextTranslatorScreen] Stopped existing sound.");
       await soundRef.current.unloadAsync();
       soundRef.current = null;
+      console.log("[TextTranslatorScreen] Unloaded existing sound and nulled ref before playing new.");
     }
     setIsSpeaking(true);
     try {
-      if (soundRef.current) {
+      if (soundRef.current) { // Ensure any previous sound object is fully gone
         await soundRef.current.unloadAsync();
         soundRef.current = null;
       }
@@ -84,16 +117,20 @@ export default function TextTranslatorScreen() {
               console.error(`Playback Error: ${playbackStatus.error}`);
               setIsSpeaking(false);
               if (soundRef.current) {
+                soundRef.current.setOnPlaybackStatusUpdate(null);
                 await soundRef.current.unloadAsync();
                 soundRef.current = null;
+                console.log("[TextTranslatorScreen] Sound unloaded due to playback error.");
               }
             }
           } else {
             if (playbackStatus.didJustFinish && !playbackStatus.isLooping) {
               setIsSpeaking(false);
               if (soundRef.current) {
+                soundRef.current.setOnPlaybackStatusUpdate(null);
                 await soundRef.current.unloadAsync();
                 soundRef.current = null;
+                console.log("[TextTranslatorScreen] Sound unloaded after finishing playback.");
               }
             }
           }
@@ -107,8 +144,10 @@ export default function TextTranslatorScreen() {
       console.error("Error in handleSpeakYoruba:", error);
       setIsSpeaking(false);
       if (soundRef.current) {
+        soundRef.current.setOnPlaybackStatusUpdate(null);
         await soundRef.current.unloadAsync();
         soundRef.current = null;
+        console.log("[TextTranslatorScreen] Sound unloaded in catch block of handleSpeakYoruba.");
       }
     }
   };
@@ -144,7 +183,7 @@ export default function TextTranslatorScreen() {
               <Button 
                 title={isSpeaking ? "Playing..." : "🔊 Play"} 
                 onPress={handleSpeakYoruba} 
-                disabled={isSpeaking}
+                disabled={isSpeaking || isLoading} // Also disable if translating
               />
             )}
           </View>
@@ -154,9 +193,8 @@ export default function TextTranslatorScreen() {
           </View>
 
           <View style={styles.navLinkContainer}>
-            <Link href="/" asChild>
-              <Pressable style={styles.navButton}><Text style={styles.navButtonText}>Go Back to Home</Text></Pressable>
-            </Link>
+            {/* Custom "Go Back to Home" button removed, relying on header back button */}
+            {/* <Link href="/" asChild><Pressable style={styles.navButton}><Text style={styles.navButtonText}>Go Back to Home</Text></Pressable></Link> */}
           </View>
         </ScrollView>
       </TouchableWithoutFeedback>
@@ -174,10 +212,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: 20,
   },
-  title: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginBottom: 20,
+  title: { // Keep title style
+    fontSize: 24, fontWeight: "bold", marginBottom: 20,
   },
   label: {
     fontSize: 16,
@@ -221,14 +257,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   navButton: {
-    backgroundColor: '#007AFF',
-    paddingVertical: 12,
-    paddingHorizontal: 25,
-    borderRadius: 8,
+    backgroundColor: '#007AFF', paddingVertical: 12, paddingHorizontal: 25, borderRadius: 8,
   },
   navButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: 'white', fontSize: 16, fontWeight: 'bold',
   }
 });
