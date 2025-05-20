@@ -3,7 +3,7 @@ import { translateToYorubaAPI } from "@/src/services/translationApiService";
 import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
 import { Audio } from 'expo-av';
 import { Stack } from "expo-router"; // Removed Link as it's not used in this version
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 // Ensure these images exist in /Users/davidolagunju/Projects/React-Native/TranslationApp/assets/images/
@@ -47,13 +47,100 @@ const mockGetEnglishCaptionAPI = async (imageUri: string): Promise<string> => {
 // --- End Mock Service ---
 
 const IMAGES_PER_PAGE = 5;
+// Define a type for items that can be displayed in the gallery,
+// accommodating both local DB items and items fetched from a server.
+interface DisplayableImageItem extends Omit<DictionaryImage, 'id'> { // Exclude 'id' if it's strictly from DB
+  id?: number; // Optional, from DB
+  image_url?: string; // For server-fetched images
+  // image_key, english_caption, asset_filename are inherited from DictionaryImage
+}
+
+// --- Backend API Configuration ---
+const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // <<< IMPORTANT: Make sure this is correct!
+                                                 // For Android emulators, if your server is on your host machine, try "http://10.0.2.2:5005".
+                                                 // For iOS simulators, "http://localhost:5005" or "http://127.0.0.1:5005" should work.
+                                                 // Ensure your server is running and accessible.
+// --- End Backend API Configuration ---
+
+// --- Mock New Images API ---
+const mockFetchNewImagesAPI = async (): Promise<Array<Omit<DisplayableImageItem, 'id' | 'asset_filename'>>> => {
+  console.log("[ImageCaptionScreen] mockFetchNewImagesAPI: Fetching new images from server...");
+  return new Promise(resolve => {
+    setTimeout(() => {
+      const newImages: Array<Omit<DisplayableImageItem, 'id' | 'asset_filename'>> = [
+        {
+          image_key: `server_img_${Date.now()}`, // Ensure unique key
+          english_caption: "A beautiful landscape from server.",
+          image_url: "https://picsum.photos/seed/server1/200/300" 
+        },
+        {
+          image_key: `server_img_${Date.now() + 1}`, // Ensure unique key
+          english_caption: "An interesting object from server.",
+          image_url: "https://picsum.photos/seed/server2/300/200"
+        }
+      ];
+      console.log("[ImageCaptionScreen] mockFetchNewImagesAPI: Received new images from server:", newImages);
+      resolve(newImages);
+    }, 1500);
+  });
+};
+// --- End Mock New Images API ---
+
+// --- Real API Service to Fetch New Images ---
+interface ServerImageMetadata {
+  image_key: string;
+  english_caption: string;
+  asset_filename: string; // e.g., "image1.jpg", "photo_abc.png" - Changed from filename
+}
+
+// const SERVER_IMAGES_PER_FETCH = 5; // Removed: Number of images to fetch from server per request
+
+const fetchRealImagesFromServer = async (): Promise<Array<Omit<DisplayableImageItem, 'id' | 'asset_filename'>>> => { // Removed limit and offset params
+  if (BACKEND_BASE_URL === "YOUR_BACKEND_URL_HERE") {
+    Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL in imageCaption.tsx.");
+    throw new Error("Backend URL not configured.");
+  }
+  const apiUrl = `${BACKEND_BASE_URL}/api/image_metadata`; // URL no longer includes limit/offset
+  console.log(`[ImageCaptionScreen] fetchRealImagesFromServer: Fetching image metadata from ${apiUrl}`);
+  try {
+    const response = await fetch(apiUrl);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const metadataList: ServerImageMetadata[] = await response.json();
+    console.log("[ImageCaptionScreen] fetchRealImagesFromServer: Received metadata:", metadataList);
+
+    // Filter out items with invalid image_key or asset_filenames
+    const validMetadataList = metadataList.filter(meta => {
+      const imageKeyIsPresentAndValidString = meta.image_key && typeof meta.image_key === 'string' && meta.image_key.trim() !== "";
+      const assetFilenameIsPresentAndValidString = meta.asset_filename && typeof meta.asset_filename === 'string' && meta.asset_filename.trim() !== "";
+      const assetFilenameIsNotTheStringUndefined = meta.asset_filename?.trim().toLowerCase() !== "undefined";
+      const isValid = imageKeyIsPresentAndValidString && assetFilenameIsPresentAndValidString && assetFilenameIsNotTheStringUndefined;
+      if (!isValid) {
+        console.warn(`[ImageCaptionScreen] fetchRealImagesFromServer: Filtering out item due to invalid data. Image Key: "${meta.image_key}", Asset Filename: "${meta.asset_filename}"`);
+      }
+      return isValid;
+    });
+
+    return validMetadataList.map(meta => {
+      console.log(`[ImageCaptionScreen] fetchRealImagesFromServer: Processing metadata for image_key "${meta.image_key}", using asset_filename: "${meta.asset_filename}"`);
+      return {
+        image_key: meta.image_key,
+        english_caption: meta.english_caption,
+        image_url: `${BACKEND_BASE_URL}/api/images/${meta.asset_filename}`, // Construct the full image URL using asset_filename
+      };
+    });
+  } catch (error) {
+    console.error("[ImageCaptionScreen] fetchRealImagesFromServer: Error fetching images:", error);
+    throw error; // Re-throw to be caught by the caller
+  }
+};
+// --- End Real API Service ---
 
 export default function ImageCaptionScreen() {
-  const [galleryDbItems, setGalleryDbItems] = useState<DictionaryImage[]>([]);
-  // selectedImageSource can be a number (from require()) or an ImagePickerAsset (from device gallery)
-  const [selectedImageSource, setSelectedImageSource] = useState<number | null>( // Simplified type
-    null
-  );
+  const [localGalleryItems, setLocalGalleryItems] = useState<DisplayableImageItem[]>([]);
+  const [serverGalleryItems, setServerGalleryItems] = useState<DisplayableImageItem[]>([]);
+  const [selectedImageSource, setSelectedImageSource] = useState<number | { uri: string } | null>(null);
   const [currentApiIdentifier, setCurrentApiIdentifier] = useState<string | null>(
     null
   );
@@ -68,7 +155,25 @@ export default function ImageCaptionScreen() {
   const [currentPage, setCurrentPage] = useState<number>(0);
   const [totalImageCount, setTotalImageCount] = useState<number>(0);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
+  const [isFetchingFromServer, setIsFetchingFromServer] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
+
+  // const [serverImagesOffset, setServerImagesOffset] = useState(0); // Removed
+  // const [allServerImagesLoaded, setAllServerImagesLoaded] = useState(false); // Removed
+
+  // For LOCAL gallery scroll arrows
+  const localGalleryScrollRef = useRef<ScrollView>(null);
+  const [localCanScrollLeft, setLocalCanScrollLeft] = useState(false);
+  const [localCanScrollRight, setLocalCanScrollRight] = useState(false);
+  const [localGalleryScrollViewWidth, setLocalGalleryScrollViewWidth] = useState(0);
+  const [currentLocalGalleryScrollX, setCurrentLocalGalleryScrollX] = useState(0);
+
+  // For SERVER gallery scroll arrows
+  const serverGalleryScrollRef = useRef<ScrollView>(null);
+  const [serverCanScrollLeft, setServerCanScrollLeft] = useState(false);
+  const [serverCanScrollRight, setServerCanScrollRight] = useState(false);
+  const [serverGalleryScrollViewWidth, setServerGalleryScrollViewWidth] = useState(0);
+  const [currentServerGalleryScrollX, setCurrentServerGalleryScrollX] = useState(0);
 
 
   const soundRef = useRef<Audio.Sound | null>(null);
@@ -135,7 +240,7 @@ export default function ImageCaptionScreen() {
 
         const initialItems = await getDictionaryImages(IMAGES_PER_PAGE, 0);
         console.log('[ImageCaptionScreen] Initial items from DB:', JSON.stringify(initialItems, null, 2));
-        setGalleryDbItems(initialItems);
+        setLocalGalleryItems(initialItems.map(item => ({...item}))); // Ensure they are DisplayableImageItem
         setCurrentPage(0);
 
         if (initialItems.length > 0) {
@@ -200,7 +305,7 @@ export default function ImageCaptionScreen() {
   }, []);
 
   const handleLoadMore = async () => {
-    if (isLoadingMore || galleryDbItems.length >= totalImageCount) {
+    if (isLoadingMore || localGalleryItems.length >= totalImageCount) {
       return;
     }
     setIsLoadingMore(true);
@@ -209,7 +314,7 @@ export default function ImageCaptionScreen() {
     try {
       const newItems = await getDictionaryImages(IMAGES_PER_PAGE, offset);
       if (newItems.length > 0) {
-        setGalleryDbItems(prevItems => [...prevItems, ...newItems]);
+        setLocalGalleryItems(prevItems => [...prevItems, ...newItems.map(item => ({...item}))]);
         setCurrentPage(nextPage);
       }
     } catch (error) {
@@ -220,27 +325,69 @@ export default function ImageCaptionScreen() {
     }
   };
 
-  const canLoadMoreImages = galleryDbItems.length < totalImageCount && !isLoadingMore;
+  const canLoadMoreDbImages = localGalleryItems.length < totalImageCount && !isLoadingMore;
 
   // handlePickImage function removed
 
-  const handleSelectFromLocalGallery = async (item: DictionaryImage) => {
-    if (isLoadingCaption || isLoadingTranslation) return;
+  const handleFetchFromServer = async () => {
+    if (isFetchingFromServer) return; // Simpler check now
+    setIsFetchingFromServer(true);
+    // Optionally clear captions or don't, depending on desired UX
+    // setEnglishCaption(""); 
+    // setYorubaCaption("");
 
-    if (allImageSources[item.image_key]) {
-      setSelectedImageSource(allImageSources[item.image_key]);
-      setCurrentApiIdentifier(item.image_key); 
-      
-      setEnglishCaption("");
-      setYorubaCaption("");
-      await fetchCaptionAndTranslate(item.image_key, item.english_caption);
-    } else {
-      console.warn(`Image key "${item.image_key}" not found in allImageSources. Cannot select.`);
-      Alert.alert("Error", "Image resource not found for this item.");
+    try {
+      const newServerImages = await fetchRealImagesFromServer(); // Call without limit/offset
+      if (newServerImages.length > 0) {
+        setServerGalleryItems(prevItems => {
+          console.log("[ImageCaptionScreen] handleFetchFromServer: prevItems keys", JSON.stringify(prevItems.map(i => i.image_key)));
+          console.log("[ImageCaptionScreen] handleFetchFromServer: newServerImages keys", JSON.stringify(newServerImages.map(i => i.image_key)));
+          const newItemsToAdd = newServerImages.filter(
+            serverImg => !prevItems.some(existingImg => existingImg.image_key === serverImg.image_key)
+          );
+          console.log("[ImageCaptionScreen] handleFetchFromServer: newItemsToAdd keys", JSON.stringify(newItemsToAdd.map(i => i.image_key)));
+          const updatedItems = [...prevItems, ...newItemsToAdd];
+          console.log("[ImageCaptionScreen] handleFetchFromServer: updatedItems for gallery (keys)", JSON.stringify(updatedItems.map(i => i.image_key)));
+          return updatedItems;
+        });
+        // Logic for serverImagesOffset and allServerImagesLoaded removed
+
+        // Optionally, select the first newly fetched image
+        // const firstNew = newServerImages[0];
+        // await handleSelectImage(firstNew);
+      } else {
+        // Logic for allServerImagesLoaded removed
+        Alert.alert("No More Images", "No new images were found on the server at this time.");
+      }
+    } catch (error) {
+      console.error("Failed to fetch images from server:", error);
+      Alert.alert("Error", "Could not fetch new images from the server.");
+    } finally {
+      setIsFetchingFromServer(false);
     }
   };
 
-  const fetchCaptionAndTranslate = async (identifier: string, preFetchedEngCaption?: string) => {
+  const handleSelectImage = async (item: DisplayableImageItem) => {
+    if (isLoadingCaption || isLoadingTranslation || isFetchingFromServer) return;
+
+    setEnglishCaption("");
+    setYorubaCaption("");
+    setCurrentApiIdentifier(item.image_key);
+
+    if (item.image_url) { // Server image
+      setSelectedImageSource({ uri: item.image_url });
+    } else if (item.asset_filename && allImageSources[item.image_key]) { // Local DB image
+      setSelectedImageSource(allImageSources[item.image_key]);
+    } else {
+      console.warn(`Image key "${item.image_key}" (asset: ${item.asset_filename}) not found or not usable. Cannot select.`);
+      Alert.alert("Error", "Image resource not found or is invalid for this item.");
+      setSelectedImageSource(null); // Clear selection
+      return; // Don't proceed to fetch caption
+    }
+    await fetchCaptionAndTranslate(item.image_key, item.english_caption);
+  };
+
+  const fetchCaptionAndTranslate = useCallback(async (identifier: string, preFetchedEngCaption?: string) => {
     if (!identifier) return;
 
     setIsLoadingCaption(true);
@@ -271,6 +418,63 @@ export default function ImageCaptionScreen() {
       setIsLoadingCaption(false);
       setIsLoadingTranslation(false);
     }
+  }, []); // Add dependencies if any are used from outside and change, e.g. API keys, etc.
+
+  // --- Scroll Arrow Logic for LOCAL Gallery ---
+  const updateLocalScrollArrowVisibility = useCallback((
+    contentOffsetX: number,
+    contentWidth: number,
+    layoutWidth: number
+  ) => {
+    if (layoutWidth <= 0) return; // Avoid calculations if layout width is not yet known
+    setLocalCanScrollLeft(contentOffsetX > 5); 
+    setLocalCanScrollRight(contentOffsetX < contentWidth - layoutWidth - 5); 
+  }, []);
+
+  const handleLocalGalleryScroll = (event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    setCurrentLocalGalleryScrollX(contentOffset.x);
+    updateLocalScrollArrowVisibility(contentOffset.x, contentSize.width, layoutMeasurement.width);
+  };
+
+  const handleLocalGalleryContentSizeChange = (contentWidth: number, contentHeight: number) => {
+    updateLocalScrollArrowVisibility(currentLocalGalleryScrollX, contentWidth, localGalleryScrollViewWidth);
+  };
+
+  const scrollLocalGallery = (direction: 'left' | 'right') => {
+    const scrollAmount = localGalleryScrollViewWidth * 0.8; 
+    const currentOffset = currentLocalGalleryScrollX; 
+    const newOffset = direction === 'left' ? Math.max(0, currentOffset - scrollAmount) : currentOffset + scrollAmount;
+    localGalleryScrollRef.current?.scrollTo({ x: newOffset, animated: true });
+  };
+  // --- End Scroll Arrow Logic for LOCAL Gallery ---
+
+  // --- Scroll Arrow Logic for SERVER Gallery ---
+  const updateServerScrollArrowVisibility = useCallback((
+    contentOffsetX: number,
+    contentWidth: number,
+    layoutWidth: number
+  ) => {
+    if (layoutWidth <= 0) return;
+    setServerCanScrollLeft(contentOffsetX > 5);
+    setServerCanScrollRight(contentOffsetX < contentWidth - layoutWidth - 5);
+  }, []);
+
+  const handleServerGalleryScroll = (event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    setCurrentServerGalleryScrollX(contentOffset.x);
+    updateServerScrollArrowVisibility(contentOffset.x, contentSize.width, layoutMeasurement.width);
+  };
+
+  const handleServerGalleryContentSizeChange = (contentWidth: number, contentHeight: number) => {
+    updateServerScrollArrowVisibility(currentServerGalleryScrollX, contentWidth, serverGalleryScrollViewWidth);
+  };
+
+  const scrollServerGallery = (direction: 'left' | 'right') => {
+    const scrollAmount = serverGalleryScrollViewWidth * 0.8;
+    const currentOffset = currentServerGalleryScrollX;
+    const newOffset = direction === 'left' ? Math.max(0, currentOffset - scrollAmount) : currentOffset + scrollAmount;
+    serverGalleryScrollRef.current?.scrollTo({ x: newOffset, animated: true });
   };
 
   const handleSpeakYorubaCaption = async () => {
@@ -335,22 +539,14 @@ export default function ImageCaptionScreen() {
     }
   };
 
-  // Simplified imageSourceForDisplay logic as selectedImageSource is now only number | null
-  const imageSourceForDisplay: number | null = selectedImageSource;
-  // if (selectedImageSource) {
-  //   if (typeof selectedImageSource === 'number') { 
-  //     imageSourceForDisplay = selectedImageSource;
-  //   } else { // This branch is no longer reachable if ImagePicker is removed
-  //     imageSourceForDisplay = { uri: selectedImageSource.uri };
-  //   }
-  // }
-  if (selectedImageSource) {
-    // imageSourceForDisplay is already set if selectedImageSource is a number
-  }
-  const isProcessing = isLoadingCaption || isLoadingTranslation; // isLoadingImage removed
-  const canInteractWithGallery = !isProcessing;
-  const canPlaySound = !isSpeaking && yorubaCaption && !yorubaCaption.startsWith("Error:");
+  // console.log("[ImageCaptionScreen] Checking SERVER_IMAGES_PER_FETCH just before render. Type:", typeof SERVER_IMAGES_PER_FETCH, "Value:", SERVER_IMAGES_PER_FETCH); // Removed
 
+  const imageSourceForDisplay = selectedImageSource; // This can be ImageRequireSource (number) or { uri: string }
+
+  const isProcessingAny = isLoadingCaption || isLoadingTranslation || isFetchingFromServer || isInitialLoading || isLoadingMore;
+  const canInteractWithGallery = !isProcessingAny;
+  const canPlaySound = !isSpeaking && yorubaCaption && !yorubaCaption.startsWith("Error:");
+  
   return (
     <>
       {/* Optional: Display a loading indicator while initial data is loading */}
@@ -361,34 +557,131 @@ export default function ImageCaptionScreen() {
       )}
     <ScrollView contentContainerStyle={styles.container}>
       <Stack.Screen options={{ title: "Image Caption Translator" }} />
-      <Text style={styles.title}>Image Caption Screen</Text>
-      {/* "Pick an Image from Gallery" Button removed */}
+      {/* <Text style={styles.title}>Image Caption Screen</Text> */}
+      
+      <View style={styles.fetchButtonContainer}>
+        <Button 
+          title={isFetchingFromServer ? "Fetching from Server..." : "Fetch New Images from Server"} 
+          onPress={handleFetchFromServer} 
+          disabled={isFetchingFromServer || isProcessingAny}
+        />
+      </View>
 
-      <Text style={styles.galleryTitle}>Or select from local gallery:</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.galleryScrollView}>
-        {galleryDbItems.map((item) => (
-          <Pressable 
-            key={item.image_key} // Use image_key from DB as key
-            onPress={() => handleSelectFromLocalGallery(item)}
-            style={[
-              styles.galleryItem, 
-              currentApiIdentifier === item.image_key && styles.galleryItemSelected,
-              !canInteractWithGallery && styles.galleryItemDisabled
-            ]}
-            disabled={!canInteractWithGallery}
-          >
-            {allImageSources[item.image_key] ? (
-              <Image source={allImageSources[item.image_key]} style={styles.galleryImage} resizeMode="cover" />
-            ) : (
-              <View style={[styles.galleryImage, styles.galleryImagePlaceholder]}>
-                <Text style={styles.galleryImagePlaceholderText}>?</Text>
-              </View>
-            )}
+      {/* Local Gallery Section */}
+      <Text style={styles.galleryTitle}>Local Gallery:</Text>
+      <View style={styles.galleryContainerWithArrows}>
+        {localCanScrollLeft && (
+          <Pressable onPress={() => scrollLocalGallery('left')} style={[styles.arrowButton, styles.leftArrow]}>
+            <Text style={styles.arrowText}>{"<"}</Text>
           </Pressable>
-        ))}
-      </ScrollView>
-      {canLoadMoreImages && (
-        <Button title={isLoadingMore ? "Loading..." : "Load More Images"} onPress={handleLoadMore} disabled={isLoadingMore} />
+        )}
+        <ScrollView 
+          ref={localGalleryScrollRef}
+          horizontal 
+          showsHorizontalScrollIndicator={false} 
+          style={styles.galleryScrollView}
+          onScroll={handleLocalGalleryScroll}
+          onLayout={(event) => {
+            const { width } = event.nativeEvent.layout;
+            setLocalGalleryScrollViewWidth(width);
+          }}
+          onContentSizeChange={handleLocalGalleryContentSizeChange}
+          scrollEventThrottle={16} // Important for onScroll performance
+        >
+          {localGalleryItems.map((item) => (
+            <Pressable 
+              key={item.image_key} // Use image_key from DB as key
+              onPress={() => handleSelectImage(item)}
+              style={[
+                styles.galleryItem, 
+                currentApiIdentifier === item.image_key && styles.galleryItemSelected,
+                !canInteractWithGallery && styles.galleryItemDisabled
+              ]}
+              disabled={!canInteractWithGallery}
+            >
+              {item.image_url ? (
+                <Image 
+                  source={{ uri: item.image_url }} 
+                  style={styles.galleryImage} 
+                  resizeMode="cover" 
+                  onLoad={() => console.log(`[ImageCaptionScreen] Gallery Image LOADED: ${item.image_key} from ${item.image_url}`)}
+                  onError={(e) => console.error(`[ImageCaptionScreen] Gallery Image FAILED to load: ${item.image_key} from ${item.image_url}. Error: ${e.nativeEvent.error}`)}
+                />
+              ) : allImageSources[item.image_key] ? (
+                <Image 
+                  source={allImageSources[item.image_key]} 
+                  style={styles.galleryImage} 
+                  resizeMode="cover" />
+              ) : (
+                <View style={[styles.galleryImage, styles.galleryImagePlaceholder]}>
+                  <Text style={styles.galleryImagePlaceholderText}>?</Text>
+                </View>
+              )}
+            </Pressable>
+          ))}
+        </ScrollView>
+        {localCanScrollRight && (
+          <Pressable onPress={() => scrollLocalGallery('right')} style={[styles.arrowButton, styles.rightArrow]}>
+            <Text style={styles.arrowText}>{">"}</Text>
+          </Pressable>
+        )}
+      </View>
+      {canLoadMoreDbImages && (
+        <Button title={isLoadingMore ? "Loading..." : "Load More DB Images"} onPress={handleLoadMore} disabled={isLoadingMore || isProcessingAny} />
+      )}
+
+      {/* Server Images Gallery Section */}
+      {serverGalleryItems.length > 0 && (
+        <>
+          <Text style={styles.galleryTitle}>Server Images:</Text>
+          <View style={styles.galleryContainerWithArrows}>
+            {serverCanScrollLeft && (
+              <Pressable onPress={() => scrollServerGallery('left')} style={[styles.arrowButton, styles.leftArrow]}>
+                <Text style={styles.arrowText}>{"<"}</Text>
+              </Pressable>
+            )}
+            <ScrollView 
+              ref={serverGalleryScrollRef}
+              horizontal 
+              showsHorizontalScrollIndicator={false} 
+              style={styles.galleryScrollView}
+              onScroll={handleServerGalleryScroll}
+              onLayout={(event) => {
+                const { width } = event.nativeEvent.layout;
+                setServerGalleryScrollViewWidth(width);
+              }}
+              onContentSizeChange={handleServerGalleryContentSizeChange}
+              scrollEventThrottle={16}
+            >
+              {serverGalleryItems.map((item) => (
+                <Pressable 
+                  key={item.image_key} 
+                  onPress={() => handleSelectImage(item)}
+                  style={[
+                    styles.galleryItem, 
+                    currentApiIdentifier === item.image_key && styles.galleryItemSelected,
+                    !canInteractWithGallery && styles.galleryItemDisabled
+                  ]}
+                  disabled={!canInteractWithGallery}
+                >
+                  {/* Server items will always have image_url */}
+                  <Image 
+                    source={{ uri: item.image_url! }} 
+                    style={styles.galleryImage} 
+                    resizeMode="cover" 
+                    onLoad={() => console.log(`[ImageCaptionScreen] Gallery Image LOADED: ${item.image_key} from ${item.image_url}`)}
+                    onError={(e) => console.error(`[ImageCaptionScreen] Gallery Image FAILED to load: ${item.image_key} from ${item.image_url}. Error: ${e.nativeEvent.error}`)}
+                  />
+                </Pressable>
+              ))}
+            </ScrollView>
+            {serverCanScrollRight && (
+              <Pressable onPress={() => scrollServerGallery('right')} style={[styles.arrowButton, styles.rightArrow]}>
+                <Text style={styles.arrowText}>{">"}</Text>
+              </Pressable>
+            )}
+          </View>
+        </>
       )}
 
       <View style={styles.imageContainer}>
@@ -416,7 +709,7 @@ export default function ImageCaptionScreen() {
             <Button 
               title={isSpeaking ? "Playing..." : "🔊 Play Yoruba Caption"} 
               onPress={handleSpeakYorubaCaption}
-              disabled={isSpeaking || isProcessing}
+              disabled={isSpeaking || isProcessingAny}
             />
           )}
         </View>
@@ -434,12 +727,19 @@ const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
     alignItems: "center",
-    padding: 20, // Keep padding
+    paddingHorizontal: 20, // Keep horizontal padding
+    paddingTop: 20,        // Keep top padding
+    paddingBottom: 60,     // Further increased bottom padding
   },
   title: {
     fontSize: 22,
     fontWeight: "bold", // Keep title style
     marginBottom: 20,
+  },
+  fetchButtonContainer: {
+    marginBottom: 15,
+    width: '80%', // Let's try reducing the width
+    alignSelf: 'center', // And center it
   },
   galleryTitle: {
     fontSize: 16,
@@ -448,10 +748,14 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     alignSelf: 'flex-start',
   },
+  galleryContainerWithArrows: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    width: '100%', // Ensure it takes full width to position arrows correctly
+  },
   galleryScrollView: {
-    width: '100%',
+    flex: 1, // Takes up space between arrows
     maxHeight: 120, // Adjust as needed
-    marginBottom: 20,
   },
   galleryItem: {
     marginRight: 10,
@@ -534,5 +838,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 10, // Ensure it's on top
+  },
+  arrowButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 20, // Make it easier to tap
+    justifyContent: 'center',
+    alignItems: 'center',
+    // backgroundColor: 'rgba(0,0,0,0.1)', // Optional: for better visibility
+    // borderRadius: 5,
+    zIndex: 1, // Ensure arrows are on top of scroll content if overlapping
+  },
+  leftArrow: {
+    // marginRight: 5, // Space between arrow and scrollview
+  },
+  rightArrow: {
+    // marginLeft: 5, // Space between scrollview and arrow
+  },
+  arrowText: {
+    fontSize: 24, // Make arrows bigger
+    fontWeight: 'bold',
+    color: '#007AFF',
   },
 });
