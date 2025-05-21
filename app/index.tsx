@@ -20,6 +20,12 @@ export default function HomeScreen() {
           <Text style={styles.navButtonText}>Visual Dictionary (Image Caption)</Text>
         </Pressable>
       </Link>
+
+      <Link href="/sentenceBuilder" asChild>
+        <Pressable style={styles.navButton}>
+          <Text style={styles.navButtonText}>Sentence Building</Text>
+        </Pressable>
+      </Link>
     </View>
   );
 }

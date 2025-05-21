@@ -22,6 +22,10 @@ export default function RootLayout() {
         name="imageCaption" // This refers to app/imageCaption.tsx
         options={{ title: "Image Caption Translator" }} 
       />
+      <Stack.Screen
+        name="sentenceBuilder" // This will refer to app/sentenceBuilder.tsx
+        options={{ title: "Sentence Builder" }}
+      />
     </Stack>
   );
 }

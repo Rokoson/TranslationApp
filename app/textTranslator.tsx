@@ -86,6 +86,12 @@ export default function TextTranslatorScreen() {
     }
   };
 
+  const handleClearText = () => {
+    setEnglishText("");
+    setYorubaText("");
+    // Optionally, you might want to focus the input again:
+    // englishInputRef.current?.focus();
+  };
   const handleSpeakYoruba = async () => {
     if (!yorubaText.trim() || yorubaText.startsWith("Error:")) {
       return;
@@ -175,8 +181,13 @@ export default function TextTranslatorScreen() {
             onChangeText={setEnglishText}
             multiline
           />
-          <Button title={isLoading ? "Translating..." : "Translate to Yoruba"} onPress={handleTranslate} disabled={isLoading} />
-          
+          <View style={styles.buttonRow}>
+            <Button title={isLoading ? "Translating..." : "Translate to Yoruba"} onPress={handleTranslate} disabled={isLoading} />
+            {englishText.length > 0 && ( // Only show Clear button if there's text
+              <Button title="Clear" onPress={handleClearText} color="#FF6347" /> // Tomato color for clear
+            )}
+          </View>
+
           <View style={styles.translationSection}>
             <Text style={styles.label}>Yoruba Translation:</Text>
             {yorubaText && !yorubaText.startsWith("Error:") && (
@@ -231,6 +242,12 @@ const styles = StyleSheet.create({
     marginBottom: 15,
     minHeight: 80,
     textAlignVertical: 'top',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around', // Or 'space-between' or add margins to buttons
+    width: '100%',
+    marginBottom: 15,
   },
   outputContainer: {
     width: "100%",
