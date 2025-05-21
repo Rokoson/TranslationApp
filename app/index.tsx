@@ -5,8 +5,8 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 export default function HomeScreen() {
   return (
     <View style={styles.container}>
-      <Stack.Screen options={{ title: "Translator Home" }} />
-      <Text style={styles.title}>Welcome to the Translator App!</Text>
+      <Stack.Screen options={{ title: "Learn Yoruba Home" }} />
+      <Text style={styles.title}>Learn Yoruba App!</Text>
       <Text style={styles.subtitle}>Choose an option:</Text>
 
       <Link href="/textTranslator" asChild>
@@ -17,7 +17,7 @@ export default function HomeScreen() {
 
       <Link href="/imageCaption" asChild>
         <Pressable style={styles.navButton}>
-          <Text style={styles.navButtonText}>Visual Dictionary (Image Caption)</Text>
+          <Text style={styles.navButtonText}>Picture Dictionary</Text>
         </Pressable>
       </Link>
 

@@ -12,7 +12,7 @@ const allImageSources: Record<string, number> = {
   cat: require("@/assets/images/animals_cat.png"),
   dog: require("@/assets/images/animals_dog.png"),
   ears: require("@/assets/images/body_parts_ears.png"),
-  //hands: require("@/assets/images/body_parts_hands.png"),
+  hands: require("@/assets/images/body_parts_hands.png"),
   // Add all your other images here with relative paths
   
 };
@@ -25,6 +25,7 @@ const IMAGES_PER_PAGE = 5;
 export interface DisplayableImageItem extends Omit<DictionaryImage, 'id'> {
   id?: number;
   image_url?: string;
+  source: 'local' | 'server'; // Add a source property
 }
 
 interface ServerImageMetadata {
@@ -34,7 +35,7 @@ interface ServerImageMetadata {
 }
 
 const fetchRealImagesFromServer = async (): Promise<Array<Omit<DisplayableImageItem, 'id' | 'asset_filename'>>> => {
-  if (BACKEND_BASE_URL === "YOUR_BACKEND_URL_HERE") {
+  if (BACKEND_BASE_URL === "BACKEND_BASE_URL") {
       Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL in imageCaption.tsx.");
       throw new Error("Backend URL not configured.");
   }
@@ -85,6 +86,7 @@ export default function ImageCaptionScreen() {
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
   const [isFetchingFromServer, setIsFetchingFromServer] = useState<boolean>(false);
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
+  const [showingServerGallery, setShowingServerGallery] = useState<boolean>(false); // New state
 
   // For LOCAL gallery scroll arrows
   const localGalleryScrollRef = useRef<ScrollView>(null);
@@ -133,28 +135,63 @@ export default function ImageCaptionScreen() {
       setIsInitialLoading(true);
       try {
         await initDatabase();
-        const count = await getTotalDictionaryImagesCount();
+
+        // Parallelize fetching count and initial items
+        const [count, dbItems] = await Promise.all([
+          getTotalDictionaryImagesCount(),
+          getDictionaryImages(IMAGES_PER_PAGE, 0)
+        ]);
+
+        // Add source property
+        const initialItemsWithSource: DisplayableImageItem[] = dbItems.map(item => ({ ...item, source: 'local' }));
+
         setTotalImageCount(count);
-        const initialItems = await getDictionaryImages(IMAGES_PER_PAGE, 0);
-        setLocalGalleryItems(initialItems.map(item => ({ ...item })));
+        setLocalGalleryItems(initialItemsWithSource);
         setCurrentPage(0);
 
-        if (initialItems.length > 0) {
-          const firstItem = initialItems[0];
-          if (allImageSources[firstItem.image_key]) {
-            await handleSelectImage(firstItem);
+        if (initialItemsWithSource.length > 0) {
+          const firstItem = initialItemsWithSource[0];
+          let imageSourceToSet: number | { uri: string } | null = null;
+          let captionToSet = firstItem.english_caption || "Caption not available.";
+
+          if (firstItem.image_url) { // Prioritize image_url if present
+            imageSourceToSet = { uri: firstItem.image_url };
+          } else if (allImageSources[firstItem.image_key]) { // Local DB image with mapped asset
+            imageSourceToSet = allImageSources[firstItem.image_key];
+          }
+
+          if (imageSourceToSet) {
+            setSelectedImageSource(imageSourceToSet);
+            setEnglishCaption(captionToSet);
+            setYorubaCaption(""); // Clear previous, prepare for new translation
+            setCurrentApiIdentifier(firstItem.image_key);
+            // Fetch caption and translate asynchronously; don't await it here.
+            // fetchCaptionAndTranslate will manage its own loading states.
+            fetchCaptionAndTranslate(firstItem.image_key, firstItem.english_caption);
           } else {
             setSelectedImageSource(null);
             setEnglishCaption("Select an image from the gallery.");
+            setYorubaCaption("");
+            setCurrentApiIdentifier(null);
           }
+          // Set initial active gallery to local if items exist
+          setShowingServerGallery(false);
         } else {
           setSelectedImageSource(null);
           setEnglishCaption("No images in local DB. Try fetching from server or add images to DB.");
+          setYorubaCaption("");
+          setCurrentApiIdentifier(null);
+          // Keep showingServerGallery as false if no local items
+          setShowingServerGallery(false);
         }
       } catch (error) {
+        // Keep showingServerGallery as false on error
+        setShowingServerGallery(false);
         console.error("Error initializing screen:", error);
         Alert.alert("Error", "Could not initialize the screen.");
         setEnglishCaption("Error loading data.");
+        setYorubaCaption("");
+        setCurrentApiIdentifier(null);
       } finally {
         setIsInitialLoading(false);
       }
@@ -172,15 +209,18 @@ export default function ImageCaptionScreen() {
   }, []);
 
   const handleLoadMore = async () => {
-    if (isLoadingMore || localGalleryItems.length >= totalImageCount) return;
+    if (isLoadingMore || localGalleryItems.length >= totalImageCount || showingServerGallery) return; // Disable if showing server gallery
     setIsLoadingMore(true);
     const nextPage = currentPage + 1;
     const offset = nextPage * IMAGES_PER_PAGE;
     try {
       const newItems = await getDictionaryImages(IMAGES_PER_PAGE, offset);
       if (newItems.length > 0) {
-        setLocalGalleryItems(prevItems => [...prevItems, ...newItems.map(item => ({ ...item }))]);
+        // Add source property
+        setLocalGalleryItems(prevItems => [...prevItems, ...newItems.map(item => ({ ...item, source: 'local' }))]);
         setCurrentPage(nextPage);
+        // Ensure local gallery is shown when loading more local items
+        setShowingServerGallery(false);
       }
     } catch (error) {
       Alert.alert("Error", "Could not load more images.");
@@ -197,7 +237,10 @@ export default function ImageCaptionScreen() {
     try {
       const newServerImages = await fetchRealImagesFromServer();
       if (newServerImages.length > 0) {
-        setServerGalleryItems(newServerImages);
+        // Add source property
+        setServerGalleryItems(newServerImages.map(item => ({ ...item, source: 'server' })));
+        // Switch to showing server gallery
+        setShowingServerGallery(true);
       } else {
         setServerGalleryItems([]);
         Alert.alert("No Images Found", "No images were found on the server at this time.");
@@ -214,6 +257,14 @@ export default function ImageCaptionScreen() {
     setEnglishCaption("");
     setYorubaCaption("");
     setCurrentApiIdentifier(item.image_key);
+
+    // Determine source and update showingServerGallery state
+    if (item.source === 'local') {
+        setShowingServerGallery(false);
+    } else if (item.source === 'server') {
+        setShowingServerGallery(true);
+    }
+
     if (item.image_url) {
       setSelectedImageSource({ uri: item.image_url });
     } else if (item.asset_filename && allImageSources[item.image_key]) {
@@ -345,9 +396,33 @@ export default function ImageCaptionScreen() {
   };
 
   const imageSourceForDisplay = selectedImageSource;
-  const isProcessingAny = isLoadingCaption || isLoadingTranslation || isFetchingFromServer || isInitialLoading || isLoadingMore;
+  const isProcessingAny = isLoadingCaption || isLoadingTranslation || isFetchingFromServer || isInitialLoading || isLoadingMore || isSpeaking; // Added isSpeaking
   const canInteractWithGallery = !isProcessingAny;
   const canPlaySound = !isSpeaking && yorubaCaption && !yorubaCaption.startsWith("Error:");
+
+  // Button to switch galleries
+  const handleSwitchGallery = () => {
+    // If currently showing server, switch to local (if local items exist)
+    // If currently showing local, switch to server (if server items exist)
+    if (showingServerGallery) {
+      if (localGalleryItems.length > 0) {
+        setShowingServerGallery(false);
+      } else {
+        Alert.alert("No Local Images", "There are no images in the local gallery to display.");
+      }
+    } else { // Currently showing local or none
+      if (serverGalleryItems.length > 0) {
+        setShowingServerGallery(true);
+      } else {
+         Alert.alert("No Server Images", "Please fetch images from the server first.");
+      }
+    }
+  };
+
+  const showLocalGallery = !showingServerGallery && localGalleryItems.length > 0;
+  const showServerGallery = showingServerGallery && serverGalleryItems.length > 0;
+  const showSwitchButton = localGalleryItems.length > 0 || serverGalleryItems.length > 0;
+
 
   if (isInitialLoading) {
     return (
@@ -370,6 +445,7 @@ export default function ImageCaptionScreen() {
         <Stack.Screen options={{ title: "Image Caption Translator" }} />
         {/* <Text style={styles.title}>Image Caption Screen</Text> */}
 
+        {/* Fetch Server Button - Always visible */}
         <View style={styles.fetchButtonContainer}>
           <Button
             title={isFetchingFromServer ? "Fetching from Server..." : "Fetch New Images from Server"}
@@ -377,58 +453,74 @@ export default function ImageCaptionScreen() {
             disabled={isFetchingFromServer || isProcessingAny}
           />
         </View>
-
-        {/* Local Gallery Section */}
-        <Text style={styles.galleryTitle}>Local Gallery:</Text>
-        <View style={styles.galleryContainerWithArrows}>
-          {localCanScrollLeft && (
-            <Pressable onPress={() => scrollLocalGallery('left')} style={[styles.arrowButton, styles.leftArrow]}>
-              <Text style={styles.arrowText}>{"<"}</Text>
-            </Pressable>
-          )}
-          <ScrollView
-            ref={localGalleryScrollRef}
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.galleryScrollView}
-            onScroll={handleLocalGalleryScroll}
-            onLayout={(event) => setLocalGalleryScrollViewWidth(event.nativeEvent.layout.width)}
-            onContentSizeChange={handleLocalGalleryContentSizeChange}
-            scrollEventThrottle={16}
-          >
-            {localGalleryItems.map((item) => (
-              <Pressable
-                key={item.image_key}
-                onPress={() => handleSelectImage(item)}
-                style={[
-                  styles.galleryItem,
-                  currentApiIdentifier === item.image_key && styles.galleryItemSelected,
-                  !canInteractWithGallery && styles.galleryItemDisabled
-                ]}
-                disabled={!canInteractWithGallery}
-              >
-                {allImageSources[item.image_key] ? (
-                  <Image source={allImageSources[item.image_key]} style={styles.galleryImage} resizeMode="cover" />
-                ) : (
-                  <View style={[styles.galleryImage, styles.galleryImagePlaceholder]}>
-                    <Text style={styles.galleryImagePlaceholderText}>?</Text>
-                  </View>
-                )}
-              </Pressable>
-            ))}
-          </ScrollView>
-          {localCanScrollRight && (
-            <Pressable onPress={() => scrollLocalGallery('right')} style={[styles.arrowButton, styles.rightArrow]}>
-              <Text style={styles.arrowText}>{">"}</Text>
-            </Pressable>
-          )}
-        </View>
-        {canLoadMoreDbImages && (
-          <Button title={isLoadingMore ? "Loading..." : "Load More DB Images"} onPress={handleLoadMore} disabled={isLoadingMore || isProcessingAny} />
+        
+        {/* Gallery Switch Button */}
+        {showSwitchButton && (
+           <View style={styles.switchButtonContainer}>
+             <Button
+               title={showingServerGallery ? "Show Local Gallery" : "Show Server Images"}
+               onPress={handleSwitchGallery}
+               disabled={isProcessingAny}
+             />
+           </View>
         )}
 
+        {/* Local Gallery Section */}
+        {showLocalGallery && (
+          <>
+            <Text style={styles.galleryTitle}>Local Gallery:</Text>
+            <View style={styles.galleryContainerWithArrows}>
+              {localCanScrollLeft && (
+                <Pressable onPress={() => scrollLocalGallery('left')} style={[styles.arrowButton, styles.leftArrow]}>
+                  <Text style={styles.arrowText}>{"<"}</Text>
+                </Pressable>
+              )}
+              <ScrollView
+                ref={localGalleryScrollRef}
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.galleryScrollView}
+                onScroll={handleLocalGalleryScroll}
+                onLayout={(event) => setLocalGalleryScrollViewWidth(event.nativeEvent.layout.width)}
+                onContentSizeChange={handleLocalGalleryContentSizeChange}
+                scrollEventThrottle={16}
+              >
+                {localGalleryItems.map((item) => (
+                  <Pressable
+                    key={item.image_key}
+                    onPress={() => handleSelectImage(item)}
+                    style={[
+                      styles.galleryItem,
+                      currentApiIdentifier === item.image_key && !showingServerGallery && styles.galleryItemSelected, // Highlight only if active gallery
+                      !canInteractWithGallery && styles.galleryItemDisabled
+                    ]}
+                    disabled={!canInteractWithGallery}
+                  >
+                    {allImageSources[item.image_key] ? (
+                      <Image source={allImageSources[item.image_key]} style={styles.galleryImage} resizeMode="cover" />
+                    ) : (
+                      <View style={[styles.galleryImage, styles.galleryImagePlaceholder]}>
+                        <Text style={styles.galleryImagePlaceholderText}>?</Text>
+                      </View>
+                    )}
+                  </Pressable>
+                ))}
+              </ScrollView>
+              {localCanScrollRight && (
+                <Pressable onPress={() => scrollLocalGallery('right')} style={[styles.arrowButton, styles.rightArrow]}>
+                  <Text style={styles.arrowText}>{">"}</Text>
+                </Pressable>
+              )}
+            </View>
+            {canLoadMoreDbImages && (
+              <Button title={isLoadingMore ? "Loading..." : "Load More DB Images"} onPress={handleLoadMore} disabled={isLoadingMore || isProcessingAny || showingServerGallery} />
+            )}
+          </>
+        )}
+
+
         {/* Server Images Gallery Section */}
-        {serverGalleryItems.length > 0 && (
+        {showServerGallery && (
           <>
             <Text style={styles.galleryTitle}>Server Images:</Text>
             <View style={styles.galleryContainerWithArrows}>
@@ -453,7 +545,7 @@ export default function ImageCaptionScreen() {
                     onPress={() => handleSelectImage(item)}
                     style={[
                       styles.galleryItem,
-                      currentApiIdentifier === item.image_key && styles.galleryItemSelected,
+                      currentApiIdentifier === item.image_key && showingServerGallery && styles.galleryItemSelected, // Highlight only if active gallery
                       !canInteractWithGallery && styles.galleryItemDisabled
                     ]}
                     disabled={!canInteractWithGallery}
@@ -478,6 +570,16 @@ export default function ImageCaptionScreen() {
             </View>
           </>
         )}
+
+        {/* Message if no gallery is shown */}
+        {!showLocalGallery && !showServerGallery && (
+            <View style={styles.noGalleryMessageContainer}>
+                <Text style={styles.noGalleryMessageText}>
+                    {showingServerGallery ? "No server images available. Try fetching." : "No local images available. Try fetching from server."}
+                </Text>
+            </View>
+        )}
+
 
         <View style={styles.imageContainer}>
           {imageSourceForDisplay ? (
@@ -537,6 +639,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   fetchButtonContainer: {
+    marginBottom: 15,
+    width: '80%',
+    alignSelf: 'center',
+  },
+  switchButtonContainer: { // New style for the switch button
     marginBottom: 15,
     width: '80%',
     alignSelf: 'center',
@@ -640,4 +747,20 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: '#007AFF',
   },
+  noGalleryMessageContainer: { // New style for message when no gallery is shown
+    width: '100%',
+    padding: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 100, // Give it some space
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  noGalleryMessageText: {
+    fontSize: 16,
+    color: '#555',
+    textAlign: 'center',
+  }
 });
