@@ -3,38 +3,45 @@ import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
 import { Audio } from 'expo-av';
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
-
-// Assuming BACKEND_BASE_URL is defined similarly to ImageCaptionScreen or in a shared config
-// const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Not needed for mock
+// --- Backend API Configuration ---
+const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Make sure this is correct!
+// --- End Backend API Configuration ---
 const SENTENCES_PER_FETCH = 5;
 
 interface ServerSentence {
   // Assuming your API returns objects with at least a 'text' field for the sentence
   // Adjust this interface based on your API's response structure
-  id: string | number; // Or some unique identifier
-  text: string;
+  id: string | number; 
+  sentence: string; // Changed from 'text' to 'sentence' to match API
 }
 
-// Mock function to fetch sentences from a local asset
-const fetchSentencesFromAPI = async (limit: number, offset: number): Promise<string[]> => {
-  console.log(`[SentenceBuilderScreen] MOCK Fetching sentences: limit=${limit}, offset=${offset}`);
-  return new Promise((resolve, reject) => {
-    setTimeout(() => { // Simulate network delay
-      try {
-        // Use require for local JSON files. Adjust path if your assets folder is elsewhere.
-        // Assuming assets folder is at the root, and sentenceBuilder.tsx is in app/
-        const allSentences: ServerSentence[] = require('../assets/data/sentences.json');
-        
-        const paginatedSentences = allSentences.slice(offset, offset + limit);
-        console.log(`[SentenceBuilderScreen] MOCK Returning ${paginatedSentences.length} sentences.`);
-        resolve(paginatedSentences.map(s => s.text));
-      } catch (error) {
-        console.error("[SentenceBuilderScreen] MOCK Error reading sentences.json:", error);
-        // Ensure sentences.json exists at assets/data/sentences.json and is valid JSON
-        reject(error);
-      }
-    }, 500); // 500ms delay
-  });
+// Function to fetch sentences from the actual API, now returns ServerSentence[]
+const fetchSentencesFromAPI = async (limit: number, offset: number): Promise<ServerSentence[]> => {
+  if (BACKEND_BASE_URL === "BACKEND_BASE_URL") { // Basic check
+    Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL in sentenceBuilder.tsx.");
+    throw new Error("Backend URL not configured.");
+  }
+
+  const apiUrl = `${BACKEND_BASE_URL}/api/sentences?limit=${limit}&offset=${offset}`;
+  console.log(`[SentenceBuilderScreen] Fetching sentences from API: ${apiUrl}`);
+
+  try {
+    const response = await fetch(apiUrl);
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(`[SentenceBuilderScreen] API Error: ${response.status}`, errorData);
+      throw new Error(`HTTP error! status: ${response.status}, message: ${errorData}`);
+    }
+    // Assuming the API returns an array of ServerSentence objects
+    const sentencesData: ServerSentence[] = await response.json();
+    console.log(`[SentenceBuilderScreen] Received ${sentencesData.length} sentences from API.`);
+    // Return the array of ServerSentence objects
+    return sentencesData;
+  } catch (error) {
+    console.error("[SentenceBuilderScreen] Error fetching sentences from API:", error);
+    // Re-throw the error so it can be caught by the calling function
+    throw error;
+  }
 };
 
 export default function SentenceBuilderScreen() {
@@ -43,12 +50,12 @@ export default function SentenceBuilderScreen() {
   const [isLoading, setIsLoading] = useState(false); // For translation loading
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAutoTranslating, setIsAutoTranslating] = useState(false); // For when a sentence is selected
-  const [apiSentences, setApiSentences] = useState<string[]>([]);
+  const [apiSentences, setApiSentences] = useState<ServerSentence[]>([]);
   const [isFetchingSentences, setIsFetchingSentences] = useState(false); // For fetching sentences
   const [sentencesOffset, setSentencesOffset] = useState(0);
   const [allApiSentencesLoaded, setAllApiSentencesLoaded] = useState(false);
+  const [currentSentenceSource, setCurrentSentenceSource] = useState<'local' | 'server'>('local');
 
-  // const englishInputRef = useRef<TextInput>(null); // No longer needed
   const soundRef = useRef<Audio.Sound | null>(null);
 
   useEffect(() => {
@@ -71,8 +78,30 @@ export default function SentenceBuilderScreen() {
     };
     configureAudio();
 
-    // Preload initial sentences when the screen mounts
-    handleFetchApiSentences(); 
+    const loadInitialLocalSentences = async () => {
+      setIsFetchingSentences(true);
+      setEnglishText("");
+      setYorubaText("");
+      try {
+        // Path relative to app/sentenceBuilder.tsx to root/assets/data/sentences.json
+        // Ensure your project structure matches this path.
+        const localSentencesData: ServerSentence[] = require('../assets/data/sentences.json');
+        setApiSentences(localSentencesData.map((s, i) => ({ ...s, id: s.id || `local-${i}` })));
+        setCurrentSentenceSource('local');
+        // For local data, all are "loaded", and offset isn't for pagination in the same way
+        setSentencesOffset(localSentencesData.length); 
+        setAllApiSentencesLoaded(true); // True in the context of 'local' source being fully loaded
+      } catch (error) {
+        console.error("[SentenceBuilderScreen] Error loading local sentences:", error);
+        Alert.alert("Error", "Could not load initial sentences from the app. Ensure 'assets/data/sentences.json' exists and is valid.");
+        setApiSentences([]);
+      } finally {
+        setIsFetchingSentences(false);
+      }
+    };
+
+    loadInitialLocalSentences();
+
 
     return () => {
       if (soundRef.current) {
@@ -81,7 +110,7 @@ export default function SentenceBuilderScreen() {
         soundRef.current = null;
       }
     };
-  }, []); // Empty dependency array ensures this runs only once on mount
+  }, []);
 
   const playSound = useCallback(async (textToSpeak: string) => {
     if (!textToSpeak.trim() || textToSpeak.startsWith("Error:")) return;
@@ -163,36 +192,63 @@ export default function SentenceBuilderScreen() {
     setIsAutoTranslating(false);
   };
 
+  // Renamed and modified to handle server fetching logic
   const handleFetchApiSentences = async () => {
-    if (isFetchingSentences || (allApiSentencesLoaded && apiSentences.length > 0)) {
+    if (isFetchingSentences) return;
+    // If currently showing server sentences and all are loaded, do nothing or inform user.
+    if (currentSentenceSource === 'server' && allApiSentencesLoaded) {
+      Alert.alert("All Loaded", "All sentences from the server have been loaded.");
       return;
     }
+
     setIsFetchingSentences(true);
+
+    let offsetForThisFetch = 0;
+    let clearPreviousSentences = false;
+
+    if (currentSentenceSource === 'local' || (currentSentenceSource === 'server' && apiSentences.length === 0)) {
+      // Switching from local to server OR initial fetch for server (if server list is empty)
+      offsetForThisFetch = 0;
+      setSentencesOffset(0); // Reset server offset
+      setAllApiSentencesLoaded(false); // Reset server loaded flag
+      clearPreviousSentences = true;
+      setEnglishText(""); 
+      setYorubaText("");
+    } else if (currentSentenceSource === 'server') {
+      // Continuing with server, load more
+      offsetForThisFetch = sentencesOffset;
+      clearPreviousSentences = false;
+    }
+
     try {
-      const newSentences = await fetchSentencesFromAPI(SENTENCES_PER_FETCH, sentencesOffset);
+      const newSentences = await fetchSentencesFromAPI(SENTENCES_PER_FETCH, offsetForThisFetch);
+      setCurrentSentenceSource('server'); // Now dealing with server data
+
       if (newSentences.length > 0) {
-        // Replace current sentences with the new batch
-        setApiSentences(newSentences);
-        setSentencesOffset(prevOffset => prevOffset + newSentences.length);
+        setApiSentences(prevSentences =>
+          clearPreviousSentences ? newSentences : [...prevSentences, ...newSentences]
+        );
+        setSentencesOffset(offsetForThisFetch + newSentences.length);
         if (newSentences.length < SENTENCES_PER_FETCH) {
           setAllApiSentencesLoaded(true);
         }
       } else {
+        // No new sentences found from server
         setAllApiSentencesLoaded(true);
-        // Only show "No More Sentences" if it's not the initial load or if some were already loaded
-        if (sentencesOffset > 0 || apiSentences.length > 0) {
+        if (offsetForThisFetch === 0 && clearPreviousSentences) { 
+            Alert.alert("No Sentences", "No sentences were found on the server.");
+            if(clearPreviousSentences) setApiSentences([]); // Ensure list is empty
+        } else if (offsetForThisFetch > 0 || (currentSentenceSource === 'server' && apiSentences.length > 0)) { 
             Alert.alert("No More Sentences", "No new sentences were found on the server.");
-        } else if (sentencesOffset === 0 && apiSentences.length === 0) {
-            Alert.alert("No Sentences", "No sentences were found to load.");
         }
       }
     } catch (error) {
       Alert.alert("Error", "Could not fetch sentences from the server.");
+      if (clearPreviousSentences) setApiSentences([]);
     } finally {
       setIsFetchingSentences(false);
     }
   };
-
   const handleClearText = () => {
     setEnglishText("");
     setYorubaText("");
@@ -201,6 +257,21 @@ export default function SentenceBuilderScreen() {
   const handleSpeakYoruba = () => {
     playSound(yorubaText);
   };
+
+  console.log("[SentenceBuilderScreen] Rendering. apiSentences state:", apiSentences);
+  
+  let fetchButtonTitle = "Fetch Sentences from Server";
+  if (isFetchingSentences) {
+    fetchButtonTitle = "Fetching...";
+  } else if (currentSentenceSource === 'server') {
+    if (allApiSentencesLoaded) {
+      fetchButtonTitle = "All Server Sentences Loaded";
+    } else {
+      fetchButtonTitle = `Fetch More Server Sentences`;
+    }
+  } else if (currentSentenceSource === 'local') {
+    fetchButtonTitle = "Switch to Server Sentences";
+  }
 
   return (
     <KeyboardAvoidingView
@@ -216,26 +287,34 @@ export default function SentenceBuilderScreen() {
 
           <View style={styles.fetchButtonContainer}>
             <Button
-              title={isFetchingSentences ? "Fetching..." : (allApiSentencesLoaded ? "All Sentences Loaded" : `Fetch ${apiSentences.length > 0 ? 'More ' : 'Initial '}Sentences`)}
+              title={fetchButtonTitle}
               onPress={handleFetchApiSentences}
-              disabled={isFetchingSentences || allApiSentencesLoaded || isLoading || isAutoTranslating}
+              disabled={isFetchingSentences || (currentSentenceSource === 'server' && allApiSentencesLoaded) || isLoading || isAutoTranslating}
             />
           </View>
 
           <Text style={styles.label}>Select an English Sentence:</Text>
           {apiSentences.length > 0 && (
-            <View style={styles.apiSentencesContainer}>
-            {apiSentences.map((sentence, index) => (
-              <Pressable
-                key={index} // Using index as key is okay if sentences don't reorder/get deleted often
-                style={styles.sentenceButton}
-                onPress={() => handleSelectSentence(sentence)}
-                disabled={isLoading || isAutoTranslating}
-              >
-                <Text style={styles.sentenceButtonText}>{sentence}</Text>
-              </Pressable>
-            ))}
-          </View>
+            <View style={[styles.apiSentencesContainer, { borderWidth: 1,  paddingVertical: 5 }]}>
+              {apiSentences.map((sentenceObj, index) => {
+                // Defensive check for the sentence object and its properties
+                if (!sentenceObj || typeof sentenceObj.sentence !== 'string' || typeof sentenceObj.id === 'undefined') { // Check sentenceObj.sentence
+                  console.error(`[SentenceBuilderScreen] Invalid or incomplete sentence object at index ${index}:`, sentenceObj);
+                  // Optionally render a placeholder or skip this item
+                  return <Text key={`error-${index}`} style={{color: 'red', paddingVertical: 5, textAlign: 'center'}}>Error: Problem loading one of the sentences.</Text>;
+                }
+                return (
+                  <Pressable
+                    key={sentenceObj.id}
+                    style={styles.sentenceButton}
+                    onPress={() => handleSelectSentence(sentenceObj.sentence)} // Use sentenceObj.sentence
+                    disabled={isLoading || isAutoTranslating}
+                  >
+                    <Text style={styles.sentenceButtonText}>{sentenceObj.sentence}</Text> 
+                  </Pressable>
+                );
+              })}
+            </View>
           )}
           
           {englishText ? (

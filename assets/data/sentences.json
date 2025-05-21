@@ -1,17 +1,8 @@
 [
-  { "id": "s1", "text": "Good morning John." },
-  { "id": "s2", "text": "What are you looking for?" },
-  { "id": "s3", "text": "What time does the train arrive?" },
-  { "id": "s4", "text": "Could you please show me the way to the bus stop?" },
-  { "id": "s5", "text": "This is my favorite book." },
-  { "id": "s6", "text": "Where is the nearest market?" },
-  { "id": "s7", "text": "Where are you going?." },
-  { "id": "s8", "text": "Do you know how to get there?" },
-  { "id": "s9", "text": "We are planning a trip to the mountains." },
-  { "id": "s10", "text": "Are you hungry?" },
-  { "id": "s11", "text": "I would like a cup of coffee, please." },
-  { "id": "s12", "text": "How do I get to the library from here?" },
-  { "id": "s13", "text": "It's important to stay hydrated." },
-  { "id": "s14", "text": "They are playing soccer in the park." },
-  { "id": "s15", "text": "I am a boy." }
+  { "id": "s1", "sentence": "Good morning mother." },
+  { "id": "s3", "sentence": "What time does the train arrive?" },
+  { "id": "s4", "sentence": "Could you please show me the way to the bus stop?" },
+  { "id": "s5", "sentence": "This is my favorite book." },
+  { "id": "s6", "sentence": "Where is the nearest market?" },
+  { "id": "s7", "sentence": "Where are you going?." },
 ]
