@@ -3,8 +3,10 @@ import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
 import { Audio } from 'expo-av';
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
+
+import { BACKEND_BASE_URL } from "@/src/config/apiConfig";
 // --- Backend API Configuration ---
-const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Make sure this is correct!
+//const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Make sure this is correct!
 // --- End Backend API Configuration ---
 const SENTENCES_PER_FETCH = 5;
 
@@ -217,7 +219,11 @@ export default function SentenceBuilderScreen() {
     } else if (currentSentenceSource === 'server') {
       // Continuing with server, load more
       offsetForThisFetch = sentencesOffset;
-      clearPreviousSentences = false;
+      // User wants to replace the current list of server sentences with the new fetched ones
+      clearPreviousSentences = true;
+      // It's good practice to also clear any selected sentence when the list is replaced
+      setEnglishText("");
+      setYorubaText("");
     }
 
     try {
@@ -231,14 +237,21 @@ export default function SentenceBuilderScreen() {
         setSentencesOffset(offsetForThisFetch + newSentences.length);
         if (newSentences.length < SENTENCES_PER_FETCH) {
           setAllApiSentencesLoaded(true);
+        } else {
+          setAllApiSentencesLoaded(false); // Ensure this is reset if a full page was fetched
         }
       } else {
         // No new sentences found from server
         setAllApiSentencesLoaded(true);
-        if (offsetForThisFetch === 0 && clearPreviousSentences) { 
+        // If clearPreviousSentences is true, it means we intended to replace the list.
+        // Since newSentences is empty, the apiSentences list should become empty.
+        if (clearPreviousSentences) {
+            setApiSentences([]);
+        }
+
+        if (offsetForThisFetch === 0) { // Distinguish message for initial fetch vs. "load more"
             Alert.alert("No Sentences", "No sentences were found on the server.");
-            if(clearPreviousSentences) setApiSentences([]); // Ensure list is empty
-        } else if (offsetForThisFetch > 0 || (currentSentenceSource === 'server' && apiSentences.length > 0)) { 
+        } else { // offsetForThisFetch > 0, meaning it was a "load more" type of action
             Alert.alert("No More Sentences", "No new sentences were found on the server.");
         }
       }

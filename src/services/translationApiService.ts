@@ -1,4 +1,4 @@
-import { TRANSLATE_API_ENDPOINT } from '../config/apiConfig';
+import { TRANSLATE_API_ENDPOINT } from '@/src/config/apiConfig';
 
 export const translateToYorubaAPI = async (text: string): Promise<string> => {
   if (!text.trim()) {

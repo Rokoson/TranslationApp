@@ -6,6 +6,8 @@ import { Stack } from "expo-router";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Button, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
+import { BACKEND_BASE_URL } from "@/src/config/apiConfig";
+
 // Ensure these images exist in /Users/davidolagunju/Projects/React-Native/TranslationApp/assets/images/
 const allImageSources: Record<string, number> = {
   bird: require("@/assets/images/animals_bird.png"),
@@ -18,7 +20,7 @@ const allImageSources: Record<string, number> = {
 };
 
 // --- Backend API Configuration ---
-const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Make sure this is correct!
+//const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Make sure this is correct!
 // --- End Backend API Configuration ---
 
 const IMAGES_PER_PAGE = 5;
