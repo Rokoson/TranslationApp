@@ -1,10 +1,13 @@
 import { DictionaryImage, getDictionaryImages, getTotalDictionaryImagesCount, initDatabase } from "@/src/services/databaseService";
 import { translateToYorubaAPI } from "@/src/services/translationApiService";
-import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
-import { Audio } from 'expo-av';
 import { Stack } from "expo-router";
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Button, Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import React, { RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { ActivityIndicator, Alert, Button, Image, ImageSourcePropType, ScrollView, StyleSheet, Text, View } from "react-native";
+
+import { ImageGallery } from "@/src/components/imageGallery"; // Import your existing component
+import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
+import { useHorizontalScroll } from "@/src/hooks/useHorizontalScroll"; // Import the new hook
+import { fetchServerImageMetadata, ServerImageMetadata } from "@/src/services/contentApiService";
 
 import { BACKEND_BASE_URL } from "@/src/config/apiConfig";
 
@@ -28,49 +31,6 @@ export interface DisplayableImageItem extends Omit<DictionaryImage, 'id'> {
   id?: number;
   image_url?: string;
   source: 'local' | 'server'; // Add a source property
-}
-
-interface ServerImageMetadata {
-  image_key: string;
-  english_caption: string;
-  asset_filename: string;
-}
-
-const fetchRealImagesFromServer = async (): Promise<Array<Omit<DisplayableImageItem, 'id' | 'asset_filename'>>> => {
-  if (BACKEND_BASE_URL === "BACKEND_BASE_URL") {
-      Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL in imageCaption.tsx.");
-      throw new Error("Backend URL not configured.");
-  }
-  const apiUrl = `${BACKEND_BASE_URL}/api/image_metadata`;
-  console.log(`[ImageCaptionScreen] fetchRealImagesFromServer: Fetching image metadata from ${apiUrl}`);
-  try {
-    const response = await fetch(apiUrl);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    let metadataList: ServerImageMetadata[] = await response.json();
-    console.log("[ImageCaptionScreen] fetchRealImagesFromServer: Received metadata:", metadataList);
-
-    const validMetadataList = metadataList.filter(meta => {
-      const imageKeyIsPresentAndValidString = meta.image_key && typeof meta.image_key === 'string' && meta.image_key.trim() !== "";
-      const assetFilenameIsPresentAndValidString = meta.asset_filename && typeof meta.asset_filename === 'string' && meta.asset_filename.trim() !== "";
-      const assetFilenameIsNotTheStringUndefined = meta.asset_filename?.trim().toLowerCase() !== "undefined";
-      const isValid = imageKeyIsPresentAndValidString && assetFilenameIsPresentAndValidString && assetFilenameIsNotTheStringUndefined;
-      if (!isValid) {
-        console.warn(`[ImageCaptionScreen] fetchRealImagesFromServer: Filtering out item due to invalid data. Image Key: "${meta.image_key}", Asset Filename: "${meta.asset_filename}"`);
-      }
-      return isValid;
-    });
-
-    return validMetadataList.map(meta => ({
-      image_key: meta.image_key,
-      english_caption: meta.english_caption,
-      image_url: `${BACKEND_BASE_URL}/api/images/${meta.asset_filename}`,
-    }));
-  } catch (error) {
-    console.error("[ImageCaptionScreen] fetchRealImagesFromServer: Error fetching images:", error);
-    throw error;
-  }
 };
 
 export default function ImageCaptionScreen() {
@@ -81,8 +41,7 @@ export default function ImageCaptionScreen() {
   const [englishCaption, setEnglishCaption] = useState<string>("");
   const [yorubaCaption, setYorubaCaption] = useState<string>("");
   const [isLoadingCaption, setIsLoadingCaption] = useState<boolean>(false);
-  const [isLoadingTranslation, setIsLoadingTranslation] = useState<boolean>(false);
-  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+  const [isLoadingTranslation, setIsLoadingTranslation] = useState<boolean>(false); // Keep this for translation-specific loading
   const [currentPage, setCurrentPage] = useState<number>(0);
   const [totalImageCount, setTotalImageCount] = useState<number>(0);
   const [isLoadingMore, setIsLoadingMore] = useState<boolean>(false);
@@ -90,49 +49,31 @@ export default function ImageCaptionScreen() {
   const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
   const [showingServerGallery, setShowingServerGallery] = useState<boolean>(false); // New state
 
+  const { isSpeaking, playSound } = useAudioPlayer();
+
   // For LOCAL gallery scroll arrows
   const localGalleryScrollRef = useRef<ScrollView>(null);
-  const [localCanScrollLeft, setLocalCanScrollLeft] = useState(false);
-  const [localCanScrollRight, setLocalCanScrollRight] = useState(false);
-  const [localGalleryScrollViewWidth, setLocalGalleryScrollViewWidth] = useState(0);
-  const [currentLocalGalleryScrollX, setCurrentLocalGalleryScrollX] = useState(0);
+  const {
+    canScrollLeft: localCanScrollLeft,
+    canScrollRight: localCanScrollRight,
+    handleScroll: handleLocalGalleryScroll,
+    handleLayout: handleLocalGalleryLayout,
+    handleContentSizeChange: handleLocalGalleryContentSizeChange,
+    scrollProgrammatically: scrollLocalGallery,
+  } = useHorizontalScroll({ scrollRef: localGalleryScrollRef });
 
   // For SERVER gallery scroll arrows
   const serverGalleryScrollRef = useRef<ScrollView>(null);
-  const [serverCanScrollLeft, setServerCanScrollLeft] = useState(false);
-  const [serverCanScrollRight, setServerCanScrollRight] = useState(false);
-  const [serverGalleryScrollViewWidth, setServerGalleryScrollViewWidth] = useState(0);
-  const [currentServerGalleryScrollX, setCurrentServerGalleryScrollX] = useState(0);
-
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const {
+    canScrollLeft: serverCanScrollLeft,
+    canScrollRight: serverCanScrollRight,
+    handleScroll: handleServerGalleryScroll,
+    handleLayout: handleServerGalleryLayout,
+    handleContentSizeChange: handleServerGalleryContentSizeChange,
+    scrollProgrammatically: scrollServerGallery,
+  } = useHorizontalScroll({ scrollRef: serverGalleryScrollRef });
 
   useEffect(() => {
-    const configureAudio = async () => {
-      try {
-        const interruptionModeIOSValue = Audio.InterruptionModeIOS?.DoNotMix ?? 1;
-        const interruptionModeAndroidValue = Audio.InterruptionModeAndroid?.DoNotMix ?? 1;
-
-        if (Audio.InterruptionModeIOS?.DoNotMix === undefined) {
-          console.warn("[ImageCaptionScreen] Audio.InterruptionModeIOS.DoNotMix is undefined. Using fallback value 1.");
-        }
-        if (Audio.InterruptionModeAndroid?.DoNotMix === undefined) {
-          console.warn("[ImageCaptionScreen] Audio.InterruptionModeAndroid.DoNotMix is undefined. Using fallback value 1.");
-        }
-
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          interruptionModeIOS: interruptionModeIOSValue,
-          shouldDuckAndroid: true,
-          interruptionModeAndroid: interruptionModeAndroidValue,
-          playThroughEarpieceAndroid: false,
-        });
-        console.log("Audio mode configured for ImageCaptionScreen.");
-      } catch (e) {
-        console.error("Failed to set audio mode on ImageCaptionScreen. Error details:", e);
-      }
-    };
-
     const initializeScreen = async () => {
       setIsInitialLoading(true);
       try {
@@ -199,15 +140,8 @@ export default function ImageCaptionScreen() {
       }
     };
 
-    configureAudio();
     initializeScreen();
-
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync().catch(e => console.error("Error unloading sound on unmount:", e));
-        soundRef.current = null;
-      }
-    };
+    // Audio configuration and cleanup is now handled by useAudioPlayer hook
   }, []);
 
   const handleLoadMore = async () => {
@@ -237,10 +171,15 @@ export default function ImageCaptionScreen() {
     if (isFetchingFromServer) return;
     setIsFetchingFromServer(true);
     try {
-      const newServerImages = await fetchRealImagesFromServer();
-      if (newServerImages.length > 0) {
-        // Add source property
-        setServerGalleryItems(newServerImages.map(item => ({ ...item, source: 'server' })));
+      const serverMetadata: ServerImageMetadata[] = await fetchServerImageMetadata();
+      if (serverMetadata.length > 0) {
+        const newServerDisplayableItems: DisplayableImageItem[] = serverMetadata.map(meta => ({
+          image_key: meta.image_key,
+          english_caption: meta.english_caption,
+          image_url: `${BACKEND_BASE_URL}/api/images/${meta.asset_filename}`, // Construct URL here
+          source: 'server',
+        }));
+        setServerGalleryItems(newServerDisplayableItems);
         // Switch to showing server gallery
         setShowingServerGallery(true);
       } else {
@@ -304,103 +243,33 @@ export default function ImageCaptionScreen() {
 
   const handleSpeakYorubaCaption = async () => {
     if (!yorubaCaption.trim() || yorubaCaption.startsWith("Error:")) return;
-    if (isSpeaking && soundRef.current) {
-      await soundRef.current.stopAsync();
-      soundRef.current.setOnPlaybackStatusUpdate(null);
-      await soundRef.current.unloadAsync();
-      soundRef.current = null;
-    }
-    setIsSpeaking(true);
-    try {
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-      const audioDataUri = await speakYorubaTextAPI(yorubaCaption);
-      if (audioDataUri && !audioDataUri.startsWith("Error:")) {
-        const { sound } = await Audio.Sound.createAsync({ uri: audioDataUri }, { shouldPlay: false });
-        soundRef.current = sound;
-        soundRef.current.setOnPlaybackStatusUpdate(async (playbackStatus) => {
-          if (!playbackStatus.isLoaded) {
-            if (playbackStatus.error) {
-              setIsSpeaking(false);
-              if (soundRef.current) {
-                soundRef.current.setOnPlaybackStatusUpdate(null);
-                await soundRef.current.unloadAsync();
-                soundRef.current = null;
-              }
-            }
-          } else {
-            if (playbackStatus.didJustFinish && !playbackStatus.isLooping) {
-              setIsSpeaking(false);
-              if (soundRef.current) {
-                soundRef.current.setOnPlaybackStatusUpdate(null);
-                await soundRef.current.unloadAsync();
-                soundRef.current = null;
-              }
-            }
-          }
-        });
-        await soundRef.current.playAsync();
-      } else {
-        setIsSpeaking(false);
-      }
-    } catch (error) {
-      setIsSpeaking(false);
-      if (soundRef.current) {
-        soundRef.current.setOnPlaybackStatusUpdate(null);
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-    }
+    // Use the playSound function from the hook
+    playSound(yorubaCaption);
   };
 
-  // --- Scroll Arrow Logic for LOCAL Gallery ---
-  const updateLocalScrollArrowVisibility = useCallback((offsetX: number, contentW: number, layoutW: number) => {
-    if (layoutW <= 0) return;
-    setLocalCanScrollLeft(offsetX > 5);
-    setLocalCanScrollRight(offsetX < contentW - layoutW - 5);
-  }, []);
-  const handleLocalGalleryScroll = (event: any) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    setCurrentLocalGalleryScrollX(contentOffset.x);
-    updateLocalScrollArrowVisibility(contentOffset.x, contentSize.width, layoutMeasurement.width);
-  };
-  const handleLocalGalleryContentSizeChange = (contentWidth: number) => {
-    updateLocalScrollArrowVisibility(currentLocalGalleryScrollX, contentWidth, localGalleryScrollViewWidth);
-  };
-  const scrollLocalGallery = (direction: 'left' | 'right') => {
-    const scrollAmount = localGalleryScrollViewWidth * 0.8;
-    const currentOffset = currentLocalGalleryScrollX;
-    const newOffset = direction === 'left' ? Math.max(0, currentOffset - scrollAmount) : currentOffset + scrollAmount;
-    localGalleryScrollRef.current?.scrollTo({ x: newOffset, animated: true });
-  };
-
-  // --- Scroll Arrow Logic for SERVER Gallery ---
-  const updateServerScrollArrowVisibility = useCallback((offsetX: number, contentW: number, layoutW: number) => {
-    if (layoutW <= 0) return;
-    setServerCanScrollLeft(offsetX > 5);
-    setServerCanScrollRight(offsetX < contentW - layoutW - 5);
-  }, []);
-  const handleServerGalleryScroll = (event: any) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    setCurrentServerGalleryScrollX(contentOffset.x);
-    updateServerScrollArrowVisibility(contentOffset.x, contentSize.width, layoutMeasurement.width);
-  };
-  const handleServerGalleryContentSizeChange = (contentWidth: number) => {
-    updateServerScrollArrowVisibility(currentServerGalleryScrollX, contentWidth, serverGalleryScrollViewWidth);
-  };
-  const scrollServerGallery = (direction: 'left' | 'right') => {
-    const scrollAmount = serverGalleryScrollViewWidth * 0.8;
-    const currentOffset = currentServerGalleryScrollX;
-    const newOffset = direction === 'left' ? Math.max(0, currentOffset - scrollAmount) : currentOffset + scrollAmount;
-    serverGalleryScrollRef.current?.scrollTo({ x: newOffset, animated: true });
-  };
+  // The scroll logic (state and handlers) is now managed by the useHorizontalScroll hook.
+  // Old state variables (e.g., localGalleryScrollViewWidth, currentLocalGalleryScrollX) and
+  // useCallback functions (e.g., updateLocalScrollArrowVisibility) related to manual scroll handling
+  // have been removed as the hook provides these functionalities.
 
   const imageSourceForDisplay = selectedImageSource;
   const isProcessingAny = isLoadingCaption || isLoadingTranslation || isFetchingFromServer || isInitialLoading || isLoadingMore || isSpeaking; // Added isSpeaking
   const canInteractWithGallery = !isProcessingAny;
   const canPlaySound = !isSpeaking && yorubaCaption && !yorubaCaption.startsWith("Error:");
+
+  const resolveLocalItemSource = (item: DisplayableImageItem): ImageSourcePropType | undefined => {
+    if (item.image_key && allImageSources[item.image_key]) {
+      return allImageSources[item.image_key];
+    }
+    return undefined; // Or a placeholder source
+  };
+
+  const resolveServerItemSource = (item: DisplayableImageItem): ImageSourcePropType | undefined => {
+    if (item.image_url) {
+      return { uri: item.image_url };
+    }
+    return undefined; // Or a placeholder source
+  };
 
   // Button to switch galleries
   const handleSwitchGallery = () => {
@@ -470,106 +339,54 @@ export default function ImageCaptionScreen() {
         {/* Local Gallery Section */}
         {showLocalGallery && (
           <>
-            <Text style={styles.galleryTitle}>Local Gallery:</Text>
-            <View style={styles.galleryContainerWithArrows}>
-              {localCanScrollLeft && (
-                <Pressable onPress={() => scrollLocalGallery('left')} style={[styles.arrowButton, styles.leftArrow]}>
-                  <Text style={styles.arrowText}>{"<"}</Text>
-                </Pressable>
-              )}
-              <ScrollView
-                ref={localGalleryScrollRef}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.galleryScrollView}
-                onScroll={handleLocalGalleryScroll}
-                onLayout={(event) => setLocalGalleryScrollViewWidth(event.nativeEvent.layout.width)}
-                onContentSizeChange={handleLocalGalleryContentSizeChange}
-                scrollEventThrottle={16}
-              >
-                {localGalleryItems.map((item) => (
-                  <Pressable
-                    key={item.image_key}
-                    onPress={() => handleSelectImage(item)}
-                    style={[
-                      styles.galleryItem,
-                      currentApiIdentifier === item.image_key && !showingServerGallery && styles.galleryItemSelected, // Highlight only if active gallery
-                      !canInteractWithGallery && styles.galleryItemDisabled
-                    ]}
-                    disabled={!canInteractWithGallery}
-                  >
-                    {allImageSources[item.image_key] ? (
-                      <Image source={allImageSources[item.image_key]} style={styles.galleryImage} resizeMode="cover" />
-                    ) : (
-                      <View style={[styles.galleryImage, styles.galleryImagePlaceholder]}>
-                        <Text style={styles.galleryImagePlaceholderText}>?</Text>
-                      </View>
-                    )}
-                  </Pressable>
-                ))}
-              </ScrollView>
-              {localCanScrollRight && (
-                <Pressable onPress={() => scrollLocalGallery('right')} style={[styles.arrowButton, styles.rightArrow]}>
-                  <Text style={styles.arrowText}>{">"}</Text>
-                </Pressable>
-              )}
-            </View>
-            {canLoadMoreDbImages && (
-              <Button title={isLoadingMore ? "Loading..." : "Load More DB Images"} onPress={handleLoadMore} disabled={isLoadingMore || isProcessingAny || showingServerGallery} />
-            )}
+            <ImageGallery
+              title="Local Gallery:"
+              items={localGalleryItems}
+              onSelectItem={handleSelectImage}
+              currentSelectedItemKey={currentApiIdentifier}
+              canInteractWithGallery={canInteractWithGallery}
+              scrollRef={localGalleryScrollRef as RefObject<ScrollView>}
+              canScrollLeft={localCanScrollLeft}
+              canScrollRight={localCanScrollRight}
+              onScrollArrowPress={scrollLocalGallery}
+              handleScroll={handleLocalGalleryScroll}
+              handleLayout={handleLocalGalleryLayout}
+              handleContentSizeChange={(w, h) => handleLocalGalleryContentSizeChange(w, h)}
+              resolveItemSource={resolveLocalItemSource}
+              isThisGalleryActive={!showingServerGallery}
+              // Props for "Load More" button for local gallery
+              isLoadingMore={isLoadingMore}
+              canLoadMore={canLoadMoreDbImages}
+              onLoadMore={handleLoadMore}
+              testID="local-gallery"
+            />
+            {/* "Load More DB Images" button is now part of ImageGallery component if canLoadMore & onLoadMore are passed */}
           </>
         )}
-
-
         {/* Server Images Gallery Section */}
         {showServerGallery && (
           <>
-            <Text style={styles.galleryTitle}>Server Images:</Text>
-            <View style={styles.galleryContainerWithArrows}>
-              {serverCanScrollLeft && (
-                <Pressable onPress={() => scrollServerGallery('left')} style={[styles.arrowButton, styles.leftArrow]}>
-                  <Text style={styles.arrowText}>{"<"}</Text>
-                </Pressable>
-              )}
-              <ScrollView
-                ref={serverGalleryScrollRef}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.galleryScrollView}
-                onScroll={handleServerGalleryScroll}
-                onLayout={(event) => setServerGalleryScrollViewWidth(event.nativeEvent.layout.width)}
-                onContentSizeChange={handleServerGalleryContentSizeChange}
-                scrollEventThrottle={16}
-              >
-                {serverGalleryItems.map((item) => (
-                  <Pressable
-                    key={item.image_key}
-                    onPress={() => handleSelectImage(item)}
-                    style={[
-                      styles.galleryItem,
-                      currentApiIdentifier === item.image_key && showingServerGallery && styles.galleryItemSelected, // Highlight only if active gallery
-                      !canInteractWithGallery && styles.galleryItemDisabled
-                    ]}
-                    disabled={!canInteractWithGallery}
-                  >
-                    {item.image_url && (
-                      <Image
-                        source={{ uri: item.image_url }}
-                        style={styles.galleryImage}
-                        resizeMode="cover"
-                        onLoad={() => console.log(`[ImageGallery] Image LOADED: ${item.image_key} from ${item.image_url}`)}
-                        onError={(e) => console.error(`[ImageGallery] Image FAILED to load: ${item.image_key} from ${item.image_url}. Error: ${e.nativeEvent.error}`)}
-                      />
-                    )}
-                  </Pressable>
-                ))}
-              </ScrollView>
-              {serverCanScrollRight && (
-                <Pressable onPress={() => scrollServerGallery('right')} style={[styles.arrowButton, styles.rightArrow]}>
-                  <Text style={styles.arrowText}>{">"}</Text>
-                </Pressable>
-              )}
-            </View>
+            <ImageGallery
+              title="Server Images:"
+              items={serverGalleryItems}
+              onSelectItem={handleSelectImage}
+              currentSelectedItemKey={currentApiIdentifier}
+              canInteractWithGallery={canInteractWithGallery}
+              scrollRef={serverGalleryScrollRef as RefObject<ScrollView>}
+              canScrollLeft={serverCanScrollLeft}
+              canScrollRight={serverCanScrollRight}
+              onScrollArrowPress={scrollServerGallery}
+              handleScroll={handleServerGalleryScroll}
+              handleLayout={handleServerGalleryLayout}
+              handleContentSizeChange={(w, h) => handleServerGalleryContentSizeChange(w, h)}
+              resolveItemSource={resolveServerItemSource}
+              isThisGalleryActive={showingServerGallery}
+              // Server gallery does not have "Load More" in this setup
+              // isLoadingMore={false} // Or omit
+              // canLoadMore={false}   // Or omit
+              // onLoadMore={undefined} // Or omit
+              testID="server-gallery"
+            />
           </>
         )}
 
@@ -655,44 +472,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 20,
     marginBottom: 10,
-    alignSelf: 'flex-start',
-  },
-  galleryContainerWithArrows: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: '100%',
-    marginBottom: 10,
-  },
-  galleryScrollView: {
-    flex: 1,
-    maxHeight: 120,
-  },
-  galleryItem: {
-    marginRight: 10,
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  galleryItemSelected: {
-    borderColor: '#007AFF',
-    borderWidth: 2,
-  },
-  galleryItemDisabled: {
-    opacity: 0.5,
-  },
-  galleryImage: {
-    width: 80,
-    height: 80,
-  },
-  galleryImagePlaceholder: {
-    backgroundColor: '#e0e0e0',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  galleryImagePlaceholderText: {
-    fontSize: 24,
-    color: '#a0a0a0',
+    alignSelf: 'flex-start', // This style is now in imageGallery.tsx (galleryTitleStyle)
   },
   imageContainer: {
     width: "100%",
@@ -734,20 +514,6 @@ const styles = StyleSheet.create({
   captionText: {
     fontSize: 16,
     marginBottom: 10,
-  },
-  arrowButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 1,
-  },
-  leftArrow: {},
-  rightArrow: {},
-  arrowText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#007AFF',
   },
   noGalleryMessageContainer: { // New style for message when no gallery is shown
     width: '100%',

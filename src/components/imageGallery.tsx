@@ -1,43 +1,62 @@
 import { DisplayableImageItem } from '@/app/imageCaption'; // Assuming DisplayableImageItem is exported from imageCaption.tsx or moved to a shared types file
-import { useImageGalleryScroll } from '@/src/hooks/useImageGalleryScroll';
-import React from 'react';
-import { Button, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { RefObject } from 'react';
+import {
+  Button,
+  Image,
+  ImageSourcePropType,
+  LayoutChangeEvent,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View
+} from 'react-native';
 
 interface ImageGalleryProps {
+  title: string; // Renamed from galleryTitle for consistency, or keep as galleryTitle if preferred
   items: DisplayableImageItem[];
   onSelectItem: (item: DisplayableImageItem) => void;
-  currentApiIdentifier: string | null;
+  currentSelectedItemKey: string | null; // Renamed from currentApiIdentifier
   canInteractWithGallery: boolean;
-  allImageSources?: Record<string, number>; // Optional, only for local gallery
-  galleryTitle: string;
   isLoadingMore?: boolean; // For "Load More" button
   canLoadMore?: boolean;   // For "Load More" button
   onLoadMore?: () => void; // For "Load More" button
   testID?: string; // For testing
+
+  // Props from useHorizontalScroll (passed by parent)
+  scrollRef: RefObject<ScrollView>;
+  canScrollLeft: boolean;
+  canScrollRight: boolean;
+  onScrollArrowPress: (direction: 'left' | 'right') => void;
+  handleScroll: (event: NativeSyntheticEvent<NativeScrollEvent>) => void;
+  handleLayout: (event: LayoutChangeEvent) => void;
+  handleContentSizeChange: (width: number, height: number) => void;
+  resolveItemSource: (item: DisplayableImageItem) => ImageSourcePropType | undefined;
+  isThisGalleryActive: boolean; // To correctly apply selection style
 }
 
 export const ImageGallery: React.FC<ImageGalleryProps> = ({
+  title,
   items,
   onSelectItem,
-  currentApiIdentifier,
+  currentSelectedItemKey,
   canInteractWithGallery,
-  allImageSources,
-  galleryTitle,
   isLoadingMore,
   canLoadMore,
   onLoadMore,
-  testID
+  testID,
+  scrollRef,
+  canScrollLeft,
+  canScrollRight,
+  onScrollArrowPress,
+  handleScroll,
+  handleLayout,
+  handleContentSizeChange,
+  resolveItemSource,
+  isThisGalleryActive,
 }) => {
-  const {
-    galleryScrollRef,
-    canScrollLeft,
-    canScrollRight,
-    handleGalleryScroll,
-    handleGalleryLayout,
-    handleGalleryContentSizeChange,
-    scrollGallery,
-  } = useImageGalleryScroll();
-
   if (!items || items.length === 0) {
     // Optionally render a placeholder or nothing if no items
     // For example, if it's the server gallery and no items are fetched yet,
@@ -48,58 +67,49 @@ export const ImageGallery: React.FC<ImageGalleryProps> = ({
 
   return (
     <>
-      <Text style={styles.galleryTitleStyle}>{galleryTitle}</Text>
+      <Text style={styles.galleryTitleStyle}>{title}</Text>
       <View style={styles.galleryContainerWithArrowsStyle} testID={testID}>
         {canScrollLeft && (
-          <Pressable onPress={() => scrollGallery('left')} style={[styles.arrowButtonStyle, styles.leftArrowStyle]}>
+          <Pressable onPress={() => onScrollArrowPress('left')} style={[styles.arrowButtonStyle, styles.leftArrowStyle]}>
             <Text style={styles.arrowTextStyle}>{"<"}</Text>
           </Pressable>
         )}
         <ScrollView
-          ref={galleryScrollRef}
+          ref={scrollRef}
           horizontal
           showsHorizontalScrollIndicator={false}
           style={styles.galleryScrollViewStyle}
-          onScroll={handleGalleryScroll}
-          onLayout={handleGalleryLayout}
-          onContentSizeChange={handleGalleryContentSizeChange}
+          onScroll={handleScroll}
+          onLayout={handleLayout}
+          onContentSizeChange={handleContentSizeChange}
           scrollEventThrottle={16}
         >
-          {items.map((item) => (
-            <Pressable
-              key={item.image_key}
-              onPress={() => onSelectItem(item)}
-              style={[
-                styles.galleryItemStyle,
-                currentApiIdentifier === item.image_key && styles.galleryItemSelectedStyle,
-                !canInteractWithGallery && styles.galleryItemDisabledStyle,
-              ]}
-              disabled={!canInteractWithGallery}
-            >
-              {item.image_url ? (
-                <Image
-                  source={{ uri: item.image_url }}
-                  style={styles.galleryImageStyle}
-                  resizeMode="cover"
-                  onLoad={() => console.log(`[ImageGallery] Image LOADED: ${item.image_key} from ${item.image_url}`)}
-                  onError={(e) => console.error(`[ImageGallery] Image FAILED to load: ${item.image_key} from ${item.image_url}. Error: ${e.nativeEvent.error}`)}
-                />
-              ) : allImageSources && allImageSources[item.image_key] ? (
-                <Image
-                  source={allImageSources[item.image_key]}
-                  style={styles.galleryImageStyle}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={[styles.galleryImageStyle, styles.galleryImagePlaceholderStyle]}>
-                  <Text style={styles.galleryImagePlaceholderTextStyle}>?</Text>
-                </View>
-              )}
-            </Pressable>
-          ))}
+          {items.map((item) => {
+            const imageSource = resolveItemSource(item);
+            return (
+              <Pressable
+                key={item.image_key} // Assuming image_key is unique and present
+                onPress={() => onSelectItem(item)}
+                style={[
+                  styles.galleryItemStyle,
+                  isThisGalleryActive && currentSelectedItemKey === item.image_key && styles.galleryItemSelectedStyle,
+                  !canInteractWithGallery && styles.galleryItemDisabledStyle,
+                ]}
+                disabled={!canInteractWithGallery}
+              >
+                {imageSource ? (
+                  <Image source={imageSource} style={styles.galleryImageStyle} resizeMode="cover" />
+                ) : (
+                  <View style={[styles.galleryImageStyle, styles.galleryImagePlaceholderStyle]}>
+                    <Text style={styles.galleryImagePlaceholderTextStyle}>?</Text>
+                  </View>
+                )}
+              </Pressable>
+            );
+          })}
         </ScrollView>
         {canScrollRight && (
-          <Pressable onPress={() => scrollGallery('right')} style={[styles.arrowButtonStyle, styles.rightArrowStyle]}>
+          <Pressable onPress={() => onScrollArrowPress('right')} style={[styles.arrowButtonStyle, styles.rightArrowStyle]}>
             <Text style={styles.arrowTextStyle}>{">"}</Text>
           </Pressable>
         )}

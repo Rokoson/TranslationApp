@@ -1,73 +1,19 @@
 import { translateToYorubaAPI } from "@/src/services/translationApiService";
-import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
-import { Audio } from 'expo-av';
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react"; // Added useRef
 import { Button, Keyboard, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableWithoutFeedback, View } from "react-native";
+
+import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
 
 export default function TextTranslatorScreen() {
   const [englishText, setEnglishText] = useState("");
   const [yorubaText, setYorubaText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const englishInputRef = useRef<TextInput>(null);
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const englishInputRef = useRef<TextInput>(null); 
 
-  useEffect(() => {
-    console.log("[TextTranslatorScreen] useEffect - MOUNTED");
-    const configureAudio = async () => {
-      console.log("[TextTranslatorScreen] Configuring audio mode...");
-      // --- Add these logs for inspection ---
-      console.log("[TextTranslatorScreen] Inspecting Audio object:", JSON.stringify(Audio, null, 2));
-      console.log("[TextTranslatorScreen] Audio.InterruptionModeIOS:", Audio.InterruptionModeIOS);
-      console.log("[TextTranslatorScreen] Audio.InterruptionModeAndroid:", Audio.InterruptionModeAndroid);
+  const { isSpeaking, playSound } = useAudioPlayer();
 
-      // Determine interruption modes with fallbacks
-      const interruptionModeIOSValue = Audio.InterruptionModeIOS?.DoNotMix ?? 1;
-      const interruptionModeAndroidValue = Audio.InterruptionModeAndroid?.DoNotMix ?? 1;
-
-      if (Audio.InterruptionModeIOS?.DoNotMix === undefined) {
-        console.warn("[TextTranslatorScreen] Audio.InterruptionModeIOS.DoNotMix is undefined. Using fallback value 1.");
-      }
-      if (Audio.InterruptionModeAndroid?.DoNotMix === undefined) {
-        console.warn("[TextTranslatorScreen] Audio.InterruptionModeAndroid.DoNotMix is undefined. Using fallback value 1.");
-      }
-
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          interruptionModeIOS: interruptionModeIOSValue,
-          shouldDuckAndroid: true,
-          interruptionModeAndroid: interruptionModeAndroidValue,
-          playThroughEarpieceAndroid: false,
-        });
-        console.log("Audio mode configured for TextTranslatorScreen.");
-      } catch (e) {
-        console.error("Failed to set audio mode on TextTranslatorScreen. Error details:", e);
-      }
-    };
-
-    configureAudio();
-
-    return () => {
-      console.log("[TextTranslatorScreen] Unmounting component. Minimal sound cleanup will run.");
-      // Minimal, correct sound cleanup
-      if (soundRef.current) {
-        console.log("[TextTranslatorScreen] Sound object exists, attempting to unload (minimal cleanup).");
-        soundRef.current.setOnPlaybackStatusUpdate(null);
-        soundRef.current.unloadAsync()
-          .then(() => {
-            console.log("[TextTranslatorScreen] Minimal sound unloaded successfully during unmount.");
-            soundRef.current = null;
-          })
-          .catch(error => {
-            console.error("[TextTranslatorScreen] Minimal error unloading sound during unmount:", error);
-            soundRef.current = null;
-          })
-          .finally(() => console.log("[TextTranslatorScreen] Minimal unmount sound cleanup finished."));
-      }
-    };
-  }, []);
+  // useEffect for audio configuration and cleanup is now handled by useAudioPlayer hook.
+  // If englishInputRef was used for focusing, that logic can remain or be added here.
 
   const handleTranslate = async () => {
     if (!englishText.trim()) {
@@ -89,73 +35,13 @@ export default function TextTranslatorScreen() {
   const handleClearText = () => {
     setEnglishText("");
     setYorubaText("");
-    // Optionally, you might want to focus the input again:
-    // englishInputRef.current?.focus();
+    englishInputRef.current?.focus(); // Focus the input after clearing
   };
   const handleSpeakYoruba = async () => {
     if (!yorubaText.trim() || yorubaText.startsWith("Error:")) {
       return;
     }
-    if (isSpeaking && soundRef.current) {
-      await soundRef.current.stopAsync();
-      soundRef.current.setOnPlaybackStatusUpdate(null); // Clear listener
-      console.log("[TextTranslatorScreen] Stopped existing sound.");
-      await soundRef.current.unloadAsync();
-      soundRef.current = null;
-      console.log("[TextTranslatorScreen] Unloaded existing sound and nulled ref before playing new.");
-    }
-    setIsSpeaking(true);
-    try {
-      if (soundRef.current) { // Ensure any previous sound object is fully gone
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-      const audioDataUri = await speakYorubaTextAPI(yorubaText);
-      if (audioDataUri && !audioDataUri.startsWith("Error:")) {
-        const { sound } = await Audio.Sound.createAsync(
-          { uri: audioDataUri },
-          { shouldPlay: false } 
-        );
-        soundRef.current = sound;
-        soundRef.current.setOnPlaybackStatusUpdate(async (playbackStatus) => {
-          if (!playbackStatus.isLoaded) {
-            if (playbackStatus.error) {
-              console.error(`Playback Error: ${playbackStatus.error}`);
-              setIsSpeaking(false);
-              if (soundRef.current) {
-                soundRef.current.setOnPlaybackStatusUpdate(null);
-                await soundRef.current.unloadAsync();
-                soundRef.current = null;
-                console.log("[TextTranslatorScreen] Sound unloaded due to playback error.");
-              }
-            }
-          } else {
-            if (playbackStatus.didJustFinish && !playbackStatus.isLooping) {
-              setIsSpeaking(false);
-              if (soundRef.current) {
-                soundRef.current.setOnPlaybackStatusUpdate(null);
-                await soundRef.current.unloadAsync();
-                soundRef.current = null;
-                console.log("[TextTranslatorScreen] Sound unloaded after finishing playback.");
-              }
-            }
-          }
-        });
-        await soundRef.current.playAsync();
-      } else {
-        console.error("Failed to get valid audio data URI. Received:", audioDataUri);
-        setIsSpeaking(false);
-      }
-    } catch (error) {
-      console.error("Error in handleSpeakYoruba:", error);
-      setIsSpeaking(false);
-      if (soundRef.current) {
-        soundRef.current.setOnPlaybackStatusUpdate(null);
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-        console.log("[TextTranslatorScreen] Sound unloaded in catch block of handleSpeakYoruba.");
-      }
-    }
+    playSound(yorubaText);
   };
 
   return (
@@ -174,7 +60,7 @@ export default function TextTranslatorScreen() {
 
           <Text style={styles.label}>Enter English Text:</Text>
           <TextInput
-            ref={englishInputRef}
+            ref={englishInputRef} 
             style={styles.input}
             placeholder="Type English here..."
             value={englishText}
@@ -188,8 +74,12 @@ export default function TextTranslatorScreen() {
             )}
           </View>
 
-          <View style={styles.translationSection}>
-            <Text style={styles.label}>Yoruba Translation:</Text>
+          {/* The Text Label and Button are now inside outputContainer */}
+          <View style={styles.outputContainer}>
+            <Text style={styles.translationBoxLabel}>Yoruba Translation:</Text>
+            <Text style={styles.outputText}>
+              {yorubaText || "Translation will appear here..."}
+            </Text>
             {yorubaText && !yorubaText.startsWith("Error:") && (
               <Button 
                 title={isSpeaking ? "Playing..." : "🔊 Play"} 
@@ -197,10 +87,6 @@ export default function TextTranslatorScreen() {
                 disabled={isSpeaking || isLoading} // Also disable if translating
               />
             )}
-          </View>
-          <View style={styles.outputContainer}>
-            <Text style={styles.outputText}>
-              {yorubaText || "Translation will appear here..."}</Text>
           </View>
 
           <View style={styles.navLinkContainer}>
@@ -261,12 +147,14 @@ const styles = StyleSheet.create({
   },
   outputText: {
     fontSize: 16,
+    marginBottom: 10, // Added to give space for the button
   },
-  translationSection: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  // translationSection style is removed as the element is no longer structured this way.
+  // The label and button are now inside outputContainer.
+  translationBoxLabel: { // New style for the label inside the box
+    fontWeight: 'bold',
+    fontSize: 16,
+    marginBottom: 5,
   },
   navLinkContainer: {
     marginTop: 30,

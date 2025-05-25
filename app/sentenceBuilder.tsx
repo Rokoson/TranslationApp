@@ -1,98 +1,59 @@
 import { translateToYorubaAPI } from "@/src/services/translationApiService";
-import { speakYorubaTextAPI } from "@/src/services/ttsApiService";
-import { Audio } from 'expo-av';
-import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
+import React, { useCallback, useEffect, useState } from "react";
+import { ActivityIndicator, Alert, Button, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
 
-import { BACKEND_BASE_URL } from "@/src/config/apiConfig";
+import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
+import { CategoryInfo, fetchAvailableCategories, fetchServerSentences, ServerSentence } from "@/src/services/contentApiService";
+
 // --- Backend API Configuration ---
 //const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Make sure this is correct!
 // --- End Backend API Configuration ---
 const SENTENCES_PER_FETCH = 5;
 
-interface ServerSentence {
-  // Assuming your API returns objects with at least a 'text' field for the sentence
-  // Adjust this interface based on your API's response structure
-  id: string | number; 
-  sentence: string; // Changed from 'text' to 'sentence' to match API
-}
-
-// Function to fetch sentences from the actual API, now returns ServerSentence[]
-const fetchSentencesFromAPI = async (limit: number, offset: number): Promise<ServerSentence[]> => {
-  if (BACKEND_BASE_URL === "BACKEND_BASE_URL") { // Basic check
-    Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL in sentenceBuilder.tsx.");
-    throw new Error("Backend URL not configured.");
-  }
-
-  const apiUrl = `${BACKEND_BASE_URL}/api/sentences?limit=${limit}&offset=${offset}`;
-  console.log(`[SentenceBuilderScreen] Fetching sentences from API: ${apiUrl}`);
-
-  try {
-    const response = await fetch(apiUrl);
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error(`[SentenceBuilderScreen] API Error: ${response.status}`, errorData);
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorData}`);
-    }
-    // Assuming the API returns an array of ServerSentence objects
-    const sentencesData: ServerSentence[] = await response.json();
-    console.log(`[SentenceBuilderScreen] Received ${sentencesData.length} sentences from API.`);
-    // Return the array of ServerSentence objects
-    return sentencesData;
-  } catch (error) {
-    console.error("[SentenceBuilderScreen] Error fetching sentences from API:", error);
-    // Re-throw the error so it can be caught by the calling function
-    throw error;
-  }
-};
-
 export default function SentenceBuilderScreen() {
   const [englishText, setEnglishText] = useState(""); // Will hold the currently selected sentence
   const [yorubaText, setYorubaText] = useState("");
   const [isLoading, setIsLoading] = useState(false); // For translation loading
-  const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAutoTranslating, setIsAutoTranslating] = useState(false); // For when a sentence is selected
   const [apiSentences, setApiSentences] = useState<ServerSentence[]>([]);
   const [isFetchingSentences, setIsFetchingSentences] = useState(false); // For fetching sentences
   const [sentencesOffset, setSentencesOffset] = useState(0);
   const [allApiSentencesLoaded, setAllApiSentencesLoaded] = useState(false);
   const [currentSentenceSource, setCurrentSentenceSource] = useState<'local' | 'server'>('local');
-
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null); // Stores the 'value' of the category
+  const [availableCategories, setAvailableCategories] = useState<CategoryInfo[]>([]);
+  const [currentFetchedCategory, setCurrentFetchedCategory] = useState<string | null>(null); // Tracks the 'value' of the category for currently displayed server sentences
+  const [isFetchingCategories, setIsFetchingCategories] = useState<boolean>(false);
+  const { isSpeaking, playSound } = useAudioPlayer();
 
   useEffect(() => {
-    const configureAudio = async () => {
-      const interruptionModeIOSValue = Audio.InterruptionModeIOS?.DoNotMix ?? 1;
-      const interruptionModeAndroidValue = Audio.InterruptionModeAndroid?.DoNotMix ?? 1;
+    // Fetch available categories from the server
+    const loadCategories = async () => {
+      setIsFetchingCategories(true);
       try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          interruptionModeIOS: interruptionModeIOSValue,
-          shouldDuckAndroid: true,
-          interruptionModeAndroid: interruptionModeAndroidValue,
-          playThroughEarpieceAndroid: false,
-        });
-        console.log("Audio mode configured for SentenceBuilderScreen.");
-      } catch (e) {
-        console.error("Failed to set audio mode on SentenceBuilderScreen. Error details:", e);
+        const fetchedCategories = await fetchAvailableCategories();
+        setAvailableCategories(fetchedCategories);
+      } catch (error) {
+        console.error("[SentenceBuilderScreen] Failed to fetch categories:", error);
+        Alert.alert("Error", "Could not load sentence categories from the server. Please check your connection or try again later.");
+        setAvailableCategories([]); // Fallback to empty list
+      } finally {
+        setIsFetchingCategories(false);
       }
     };
-    configureAudio();
+    loadCategories();
 
     const loadInitialLocalSentences = async () => {
       setIsFetchingSentences(true);
       setEnglishText("");
       setYorubaText("");
       try {
-        // Path relative to app/sentenceBuilder.tsx to root/assets/data/sentences.json
-        // Ensure your project structure matches this path.
         const localSentencesData: ServerSentence[] = require('../assets/data/sentences.json');
         setApiSentences(localSentencesData.map((s, i) => ({ ...s, id: s.id || `local-${i}` })));
         setCurrentSentenceSource('local');
-        // For local data, all are "loaded", and offset isn't for pagination in the same way
-        setSentencesOffset(localSentencesData.length); 
-        setAllApiSentencesLoaded(true); // True in the context of 'local' source being fully loaded
+        setCurrentFetchedCategory(null);
+        setSentencesOffset(localSentencesData.length);
+        setAllApiSentencesLoaded(true);
       } catch (error) {
         console.error("[SentenceBuilderScreen] Error loading local sentences:", error);
         Alert.alert("Error", "Could not load initial sentences from the app. Ensure 'assets/data/sentences.json' exists and is valid.");
@@ -103,65 +64,7 @@ export default function SentenceBuilderScreen() {
     };
 
     loadInitialLocalSentences();
-
-
-    return () => {
-      if (soundRef.current) {
-        soundRef.current.setOnPlaybackStatusUpdate(null);
-        soundRef.current.unloadAsync().catch(e => console.error("Error unloading sound on unmount:", e));
-        soundRef.current = null;
-      }
-    };
   }, []);
-
-  const playSound = useCallback(async (textToSpeak: string) => {
-    if (!textToSpeak.trim() || textToSpeak.startsWith("Error:")) return;
-
-    if (isSpeaking && soundRef.current) {
-      await soundRef.current.stopAsync();
-      soundRef.current.setOnPlaybackStatusUpdate(null);
-      await soundRef.current.unloadAsync();
-      soundRef.current = null;
-    }
-    setIsSpeaking(true);
-    try {
-      const audioDataUri = await speakYorubaTextAPI(textToSpeak);
-      if (audioDataUri && !audioDataUri.startsWith("Error:")) {
-        const { sound } = await Audio.Sound.createAsync({ uri: audioDataUri }, { shouldPlay: false });
-        soundRef.current = sound;
-        soundRef.current.setOnPlaybackStatusUpdate(async (status) => {
-          if (!status.isLoaded) {
-            if (status.error) {
-              setIsSpeaking(false);
-              if (soundRef.current) {
-                soundRef.current.setOnPlaybackStatusUpdate(null);
-                await soundRef.current.unloadAsync();
-                soundRef.current = null;
-              }
-            }
-          } else if (status.didJustFinish && !status.isLooping) {
-            setIsSpeaking(false);
-            if (soundRef.current) {
-              soundRef.current.setOnPlaybackStatusUpdate(null);
-              await soundRef.current.unloadAsync();
-              soundRef.current = null;
-            }
-          }
-        });
-        await soundRef.current.playAsync();
-      } else {
-        setIsSpeaking(false);
-      }
-    } catch (error) {
-      console.error("Error in playSound:", error);
-      setIsSpeaking(false);
-      if (soundRef.current) {
-        soundRef.current.setOnPlaybackStatusUpdate(null);
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-    }
-  }, [isSpeaking]);
 
   const translateText = useCallback(async (textToTranslate: string, autoPlaySound = false) => {
     if (!textToTranslate.trim()) {
@@ -190,101 +93,128 @@ export default function SentenceBuilderScreen() {
     setEnglishText(sentence);
     setYorubaText("Translating...");
     setIsAutoTranslating(true);
-    await translateText(sentence, false); // Translate, but DO NOT autoplay sound
+    await translateText(sentence, false);
     setIsAutoTranslating(false);
   };
 
-  // Renamed and modified to handle server fetching logic
+  const getCategoryDisplayName = useCallback((value: string | null): string | null => {
+    if (!value) return null;
+    const foundCategory = availableCategories.find(cat => cat.value === value);
+    return foundCategory ? foundCategory.displayName : value; // Fallback to value if not found
+  }, [availableCategories]);
+
   const handleFetchApiSentences = async () => {
     if (isFetchingSentences) return;
-    // If currently showing server sentences and all are loaded, do nothing or inform user.
-    if (currentSentenceSource === 'server' && allApiSentencesLoaded) {
-      Alert.alert("All Loaded", "All sentences from the server have been loaded.");
+
+    const categoryToFetch = selectedCategory; // This is the 'value' of the category
+    console.log(`[SentenceBuilderScreen] handleFetchApiSentences: Called. categoryToFetch = '${categoryToFetch}', currentFetchedCategory = '${currentFetchedCategory}', currentSentenceSource = '${currentSentenceSource}'`);
+    const isNewCategoryContext = categoryToFetch !== currentFetchedCategory || currentSentenceSource === 'local';
+    const categoryToFetchDisplayName = getCategoryDisplayName(categoryToFetch);
+
+    if (currentSentenceSource === 'server' && !isNewCategoryContext && allApiSentencesLoaded) {
+      const alertMessage = categoryToFetchDisplayName
+        ? `All sentences for category '${categoryToFetchDisplayName}' have been loaded.`
+        : "All general sentences from the server have been loaded.";
+      Alert.alert("All Loaded", alertMessage);
       return;
     }
 
     setIsFetchingSentences(true);
-
     let offsetForThisFetch = 0;
-    let clearPreviousSentences = false;
+    let shouldClearPreviousSentences = false;
 
-    if (currentSentenceSource === 'local' || (currentSentenceSource === 'server' && apiSentences.length === 0)) {
-      // Switching from local to server OR initial fetch for server (if server list is empty)
+    if (isNewCategoryContext) {
       offsetForThisFetch = 0;
-      setSentencesOffset(0); // Reset server offset
-      setAllApiSentencesLoaded(false); // Reset server loaded flag
-      clearPreviousSentences = true;
-      setEnglishText(""); 
+      setSentencesOffset(0);
+      setAllApiSentencesLoaded(false);
+      shouldClearPreviousSentences = true;
+      setEnglishText("");
       setYorubaText("");
+      setCurrentFetchedCategory(categoryToFetch);
     } else if (currentSentenceSource === 'server') {
-      // Continuing with server, load more
       offsetForThisFetch = sentencesOffset;
-      // User wants to replace the current list of server sentences with the new fetched ones
-      clearPreviousSentences = true;
-      // It's good practice to also clear any selected sentence when the list is replaced
+      shouldClearPreviousSentences = true; // Replace existing sentences
       setEnglishText("");
       setYorubaText("");
     }
 
     try {
-      const newSentences = await fetchSentencesFromAPI(SENTENCES_PER_FETCH, offsetForThisFetch);
-      setCurrentSentenceSource('server'); // Now dealing with server data
+      console.log(`[SentenceBuilderScreen] Attempting to fetch sentences with category: ${categoryToFetch}, offset: ${offsetForThisFetch}`);
+      const newSentences = await fetchServerSentences(SENTENCES_PER_FETCH, offsetForThisFetch, categoryToFetch);
+      // This is the log you mentioned might be missing. If it is, an error likely occurred above.
+      console.log("[SentenceBuilderScreen] handleFetchApiSentences: Received newSentences from API:", JSON.stringify(newSentences, null, 2));
+      setCurrentSentenceSource('server');
 
       if (newSentences.length > 0) {
         setApiSentences(prevSentences =>
-          clearPreviousSentences ? newSentences : [...prevSentences, ...newSentences]
+          shouldClearPreviousSentences ? newSentences : [...prevSentences, ...newSentences]
         );
         setSentencesOffset(offsetForThisFetch + newSentences.length);
-        if (newSentences.length < SENTENCES_PER_FETCH) {
-          setAllApiSentencesLoaded(true);
-        } else {
-          setAllApiSentencesLoaded(false); // Ensure this is reset if a full page was fetched
-        }
+        setAllApiSentencesLoaded(newSentences.length < SENTENCES_PER_FETCH);
       } else {
-        // No new sentences found from server
         setAllApiSentencesLoaded(true);
-        // If clearPreviousSentences is true, it means we intended to replace the list.
-        // Since newSentences is empty, the apiSentences list should become empty.
-        if (clearPreviousSentences) {
-            setApiSentences([]);
+        if (shouldClearPreviousSentences) {
+          setApiSentences([]);
         }
-
-        if (offsetForThisFetch === 0) { // Distinguish message for initial fetch vs. "load more"
-            Alert.alert("No Sentences", "No sentences were found on the server.");
-        } else { // offsetForThisFetch > 0, meaning it was a "load more" type of action
-            Alert.alert("No More Sentences", "No new sentences were found on the server.");
-        }
+        const categoryMsgPart = categoryToFetchDisplayName ? ` for category '${categoryToFetchDisplayName}'` : "";
+        const alertTitle = offsetForThisFetch === 0 ? "No Sentences Found" : "No More Sentences";
+        const alertMessage = offsetForThisFetch === 0
+          ? `No sentences were found on the server${categoryMsgPart}.`
+          : `No new sentences were found on the server${categoryMsgPart}.`;
+        Alert.alert(alertTitle, alertMessage);
       }
     } catch (error) {
-      Alert.alert("Error", "Could not fetch sentences from the server.");
-      if (clearPreviousSentences) setApiSentences([]);
+      // If the "Received newSentences" log above is missing, this error log should appear.
+      console.error("[SentenceBuilderScreen] Error fetching API sentences:", error);
+      Alert.alert("Error", "Could not fetch sentences from the server. Check console for details.");
+      if (shouldClearPreviousSentences) setApiSentences([]);
     } finally {
       setIsFetchingSentences(false);
     }
   };
+
   const handleClearText = () => {
     setEnglishText("");
     setYorubaText("");
   };
 
   const handleSpeakYoruba = () => {
-    playSound(yorubaText);
+    if (yorubaText && !yorubaText.startsWith("Error:") && !isSpeaking) {
+      playSound(yorubaText);
+    }
   };
 
-  console.log("[SentenceBuilderScreen] Rendering. apiSentences state:", apiSentences);
-  
+  const targetCategoryForFetch = selectedCategory; // This is the 'value'
+  const displayCategoryContext = currentFetchedCategory; // This is the 'value'
+
   let fetchButtonTitle = "Fetch Sentences from Server";
   if (isFetchingSentences) {
-    fetchButtonTitle = "Fetching...";
+    const targetDisplayName = getCategoryDisplayName(targetCategoryForFetch);
+    fetchButtonTitle = `Fetching ${targetDisplayName ? `'${targetDisplayName}' ` : ''}Sentences...`;
   } else if (currentSentenceSource === 'server') {
-    if (allApiSentencesLoaded) {
-      fetchButtonTitle = "All Server Sentences Loaded";
+    const targetDisplayName = getCategoryDisplayName(targetCategoryForFetch);
+    const currentDisplayContextName = getCategoryDisplayName(displayCategoryContext);
+
+    if (targetCategoryForFetch === displayCategoryContext) {
+      const categoryNameText = currentDisplayContextName ? `'${currentDisplayContextName}' ` : '';
+      fetchButtonTitle = allApiSentencesLoaded
+        ? `All ${categoryNameText}Server Sentences Loaded`
+        : `Fetch More ${categoryNameText}Server Sentences`;
     } else {
-      fetchButtonTitle = `Fetch More Server Sentences`;
+      fetchButtonTitle = `Fetch ${targetDisplayName ? `'${targetDisplayName}' ` : 'All'} Sentences`;
     }
   } else if (currentSentenceSource === 'local') {
-    fetchButtonTitle = "Switch to Server Sentences";
+    const targetDisplayName = getCategoryDisplayName(targetCategoryForFetch);
+    fetchButtonTitle = `Fetch ${targetDisplayName ? `'${targetDisplayName}' ` : ''}Server Sentences`;
   }
+
+  const isGenerallyBusy = isLoading || isAutoTranslating || isSpeaking || isFetchingSentences || isFetchingCategories;
+
+  const fetchButtonDisabled =
+    isGenerallyBusy ||
+    (currentSentenceSource === 'server' &&
+      targetCategoryForFetch === displayCategoryContext &&
+      allApiSentencesLoaded);
 
   return (
     <KeyboardAvoidingView
@@ -298,38 +228,81 @@ export default function SentenceBuilderScreen() {
         >
           <Text style={styles.title}>Sentence Builder</Text>
 
+          <View style={styles.categorySelectionContainer}>
+            <Text style={styles.label}>Filter by Category (Optional):</Text>
+            <View style={styles.categoryButtonsContainer}>
+              {isFetchingCategories && <ActivityIndicator size="small" color="#0000ff" style={styles.loadingIndicator} />}
+              {!isFetchingCategories && availableCategories.length === 0 && (
+                <Text style={styles.placeholderText}>No categories available.</Text>
+              )}
+              {!isFetchingCategories && availableCategories.map(catInfo => (
+                <Pressable
+                  key={catInfo.value}
+                  style={[
+                    styles.categoryButton,
+                    selectedCategory === catInfo.value && styles.categoryButtonSelected,
+                    isGenerallyBusy && styles.disabledButton
+                  ]}
+                  onPress={() => {
+                     console.log("[SentenceBuilderScreen] Category selected/deselected. Value:", catInfo.value);
+                     setSelectedCategory(prev => prev === catInfo.value ? null : catInfo.value);
+                  }}
+                  disabled={isGenerallyBusy}
+                >
+                  <Text style={
+                    selectedCategory === catInfo.value
+                      ? [styles.categoryButtonText, styles.categoryButtonTextSelected]
+                      : styles.categoryButtonText
+                  }>
+                    {catInfo.displayName}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {selectedCategory && (
+              <Pressable
+                onPress={() => {
+                  console.log("[SentenceBuilderScreen] Clearing selected category.");
+                  setSelectedCategory(null);
+                }}
+                style={[styles.clearCategoryButton, isGenerallyBusy && styles.disabledButton]}
+                disabled={isGenerallyBusy}
+              >
+                <Text style={styles.clearCategoryButtonText}>Clear Selected Category</Text>
+              </Pressable>
+            )}
+          </View>
+
           <View style={styles.fetchButtonContainer}>
-            <Button
-              title={fetchButtonTitle}
-              onPress={handleFetchApiSentences}
-              disabled={isFetchingSentences || (currentSentenceSource === 'server' && allApiSentencesLoaded) || isLoading || isAutoTranslating}
-            />
+            <Button title={fetchButtonTitle} onPress={handleFetchApiSentences} disabled={fetchButtonDisabled} />
           </View>
 
           <Text style={styles.label}>Select an English Sentence:</Text>
-          {apiSentences.length > 0 && (
-            <View style={[styles.apiSentencesContainer, { borderWidth: 1,  paddingVertical: 5 }]}>
+          {apiSentences.length > 0 ? (
+            <View style={[styles.apiSentencesContainer, { borderWidth: 1, paddingVertical: 5 }]}>
               {apiSentences.map((sentenceObj, index) => {
-                // Defensive check for the sentence object and its properties
-                if (!sentenceObj || typeof sentenceObj.sentence !== 'string' || typeof sentenceObj.id === 'undefined') { // Check sentenceObj.sentence
+                if (!sentenceObj || typeof sentenceObj.sentence !== 'string' || typeof sentenceObj.id === 'undefined') {
                   console.error(`[SentenceBuilderScreen] Invalid or incomplete sentence object at index ${index}:`, sentenceObj);
-                  // Optionally render a placeholder or skip this item
-                  return <Text key={`error-${index}`} style={{color: 'red', paddingVertical: 5, textAlign: 'center'}}>Error: Problem loading one of the sentences.</Text>;
+                  return <Text key={`error-${index}`} style={{ color: 'red', paddingVertical: 5, textAlign: 'center' }}>Error: Problem loading one of the sentences.</Text>;
                 }
                 return (
                   <Pressable
                     key={sentenceObj.id}
                     style={styles.sentenceButton}
-                    onPress={() => handleSelectSentence(sentenceObj.sentence)} // Use sentenceObj.sentence
-                    disabled={isLoading || isAutoTranslating}
+                    onPress={() => handleSelectSentence(sentenceObj.sentence)}
+                    disabled={isGenerallyBusy}
                   >
-                    <Text style={styles.sentenceButtonText}>{sentenceObj.sentence}</Text> 
+                    <Text style={styles.sentenceButtonText}>{sentenceObj.sentence}</Text>
                   </Pressable>
                 );
               })}
             </View>
+          ) : (
+            <Text style={styles.placeholderText}>
+              {currentSentenceSource === 'local' ? "No local sentences loaded. Check 'assets/data/sentences.json'." : "No sentences to display. Try fetching from server or selecting a different category."}
+            </Text>
           )}
-          
+
           {englishText ? (
             <View style={styles.selectedSentenceContainer}>
               <Text style={styles.label}>Selected:</Text>
@@ -339,26 +312,24 @@ export default function SentenceBuilderScreen() {
             apiSentences.length > 0 && <Text style={styles.placeholderText}>Select a sentence above to see its translation.</Text>
           )}
 
-          <View style={styles.buttonRow}>            
+          <View style={styles.buttonRow}>
             {(englishText.length > 0 || yorubaText.length > 0) && (
-              <Button title="Clear" onPress={handleClearText} color="#FF6347" />
+              <Button title="Clear" onPress={handleClearText} color="#FF6347" disabled={isGenerallyBusy} />
             )}
           </View>
 
-          <View style={styles.translationSection}>
-            <Text style={styles.label}>Yoruba Translation:</Text>
+          <View style={styles.outputContainer}>
+            <Text style={styles.translationBoxLabel}>Yoruba Translation:</Text>
+            <Text style={styles.outputText}>
+              {yorubaText || (englishText ? "Translation will appear here..." : "")}
+            </Text>
             {yorubaText && !yorubaText.startsWith("Error:") && (
               <Button
                 title={isSpeaking ? "Playing..." : "🔊 Play"}
                 onPress={handleSpeakYoruba}
-                disabled={isSpeaking || isLoading || isAutoTranslating}
+                disabled={isGenerallyBusy || isSpeaking}
               />
             )}
-          </View>
-          <View style={styles.outputContainer}>
-            <Text style={styles.outputText}>
-              {yorubaText || (englishText ? "Translation will appear here..." : "")}
-            </Text>
           </View>
         </ScrollView>
       </TouchableWithoutFeedback>
@@ -385,6 +356,42 @@ const styles = StyleSheet.create({
     marginTop: 20,
     alignSelf: "flex-start",
   },
+  categorySelectionContainer: {
+    width: '100%',
+    marginBottom: 15,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 5,
+    backgroundColor: '#f9f9f9',
+  },
+  categoryButtonsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    marginTop: 5,
+  },
+  categoryButton: {
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    marginRight: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#ccc',
+  },
+  categoryButtonSelected: {
+    backgroundColor: '#007AFF',
+    borderColor: '#0056b3',
+  },
+  categoryButtonText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  categoryButtonTextSelected: {
+    color: '#fff',
+  },
   fetchButtonContainer: {
     width: '100%',
     marginBottom: 15,
@@ -407,6 +414,8 @@ const styles = StyleSheet.create({
     width: '100%',
     marginBottom: 15,
     marginTop: 5,
+    borderColor: '#ccc',
+    borderRadius: 5,
   },
   sentenceButton: {
     backgroundColor: '#e7e7e7',
@@ -425,12 +434,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: '100%',
     marginBottom: 15,
-    marginTop: 10, // Added some top margin
+    marginTop: 10,
   },
   placeholderText: {
     textAlign: 'center',
     color: '#888',
-    marginVertical: 20,
+    marginVertical: 10, // Reduced margin a bit
     fontSize: 15,
   },
   outputContainer: {
@@ -445,12 +454,27 @@ const styles = StyleSheet.create({
   },
   outputText: {
     fontSize: 16,
+    marginBottom: 10,
   },
-  translationSection: {
-    width: '100%',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  translationBoxLabel: {
+    fontWeight: 'bold',
+    fontSize: 16,
     marginBottom: 5,
   },
+  clearCategoryButton: {
+    marginTop: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    alignSelf: 'flex-start',
+  },
+  clearCategoryButtonText: {
+    color: '#007AFF',
+    fontSize: 14,
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  loadingIndicator: {
+    marginVertical: 10,
+  }
 });
