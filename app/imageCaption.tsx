@@ -1,10 +1,10 @@
 import { useAudioPlayer } from "@/src/hooks/useAudioPlayer"; // Import audio player hook
 import { generateCaptionAPI } from "@/src/services/captionApiService";
-import { fetchServerImageMetadata, ServerImageMetadata } from "@/src/services/contentApiService";
+import { CategoryInfo, fetchAvailableImageCategories, fetchServerImageMetadata, ServerImageMetadata } from "@/src/services/contentApiService";
 import { translateToYorubaAPI } from "@/src/services/translationApiService"; // Import translation service
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Button, Image, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
-// Note: Ensure you have Ionicons installed in your project
+// Note: Ensure you have Ionicons installed in your project if you decide to use it for icons
 // Assuming you have a config file for backend URL
 // import { BACKEND_BASE_URL } from "../src/config/apiConfig";
 
@@ -37,13 +37,19 @@ export default function ImageCaptionScreen() {
   const [isFetchingImages, setIsFetchingImages] = useState(false);
   const [imagesOffset, setImagesOffset] = useState(0);
   const [allApiImagesLoaded, setAllApiImagesLoaded] = useState(false);
+
+  // State for image category filtering
+  const [selectedImageCategory, setSelectedImageCategory] = useState<string | null>(null);
+  const [availableImageCategories, setAvailableImageCategories] = useState<CategoryInfo[]>([]);
+  const [isFetchingImageCategories, setIsFetchingImageCategories] = useState<boolean>(false);
+  const [currentFetchedImageCategory, setCurrentFetchedImageCategory] = useState<string | null>(null); // Tracks category of currently displayed server images
+
   const imageScrollViewRef = useRef<ScrollView>(null);
   const [imageScrollPosition, setImageScrollPosition] = useState(0);
   const [imageContentWidth, setImageContentWidth] = useState(0);
   const [imageScrollViewWidth, setImageScrollViewWidth] = useState(0);
 
   const { isSpeaking, playSound } = useAudioPlayer(); // Initialize audio player
-  // currentImageSource state removed as we default to local and fetch server images
 
   useEffect(() => {
     const loadInitialLocalImages = async () => {
@@ -62,7 +68,7 @@ export default function ImageCaptionScreen() {
           console.error(`[ImageCaptionScreen] ${errorMessage} Received:`, localImageMetadataModule);
           Alert.alert("Loading Error", errorMessage + " Please check the file content and path.");
           setApiImages([]);
-          setAllApiImagesLoaded(true); // Consider it "all loaded" if local data fails
+          setAllApiImagesLoaded(false); // Ensure button is enabled if local load fails
           setIsFetchingImages(false);
           return; // Stop further processing
         }
@@ -83,17 +89,23 @@ export default function ImageCaptionScreen() {
           handleSelectImage(processedLocalImages[0]);
         }
         setImagesOffset(processedLocalImages.length); // Use the correctly assigned variable
-        setAllApiImagesLoaded(true); // All local images are considered loaded
+        setAllApiImagesLoaded(false); // Reset for server fetch context - initially assume more server images are available
+        setCurrentFetchedImageCategory(null); // Ensure the context is null for local images
+
       } catch (error) {
         console.error("[ImageCaptionScreen] Error during local image metadata processing (in catch block):", error);
         Alert.alert("Error", "Could not load images from the app. Ensure 'assets/data/images.json' exists and is valid.");
         setApiImages([]);
+        setAllApiImagesLoaded(false); // Ensure button is enabled if local load fails
+        setCurrentFetchedImageCategory(null); // Ensure the context is null
       } finally {
         setIsFetchingImages(false); // Set to false after local images are processed
       }
     };
 
     loadInitialLocalImages();
+    // Initial load of image categories
+    handleRefreshImageCategories(true);
   }, []); // Empty dependency array means this runs once on mount
 
   // Effect to translate English caption when it changes
@@ -104,6 +116,12 @@ export default function ImageCaptionScreen() {
       setYorubaCaption(""); // Clear Yoruba caption if English caption is invalid or empty
     }
   }, [englishCaption]);
+
+  const getCategoryDisplayName = useCallback((value: string | null): string | null => {
+    if (!value) return null;
+    const foundCategory = availableImageCategories.find(cat => cat.value === value);
+    return foundCategory ? foundCategory.displayName : value; // Fallback to value if not found
+  }, [availableImageCategories]);
 
   const handleSelectImage = (image: ServerImageMetadata) => {
     setSelectedImage(image);
@@ -159,40 +177,90 @@ export default function ImageCaptionScreen() {
     }
   };
 
+  const handleRefreshImageCategories = async (isInitialLoad = false) => {
+    if (isFetchingImageCategories && !isInitialLoad) return;
+
+    setIsFetchingImageCategories(true);
+    try {
+      const fetchedCategories = await fetchAvailableImageCategories();
+      console.log("[ImageCaptionScreen] Fetched image categories from server:", JSON.stringify(fetchedCategories, null, 2));
+      setAvailableImageCategories(fetchedCategories);
+      if (!isInitialLoad) {
+        // Alert.alert("Categories Refreshed", "The list of image categories has been updated."); // Optional: re-enable if desired
+      }
+    } catch (error) {
+      console.error("[ImageCaptionScreen] Failed to refresh image categories:", error);
+      Alert.alert("Error", "Could not refresh image categories. Please check your connection or try again later.");
+    } finally {
+      setIsFetchingImageCategories(false);
+    }
+  };
+
   // This function will now always fetch images from the server
   const handleFetchApiImages = async () => {
     if (isFetchingImages) return;
+
+    const categoryToFetch = selectedImageCategory;
+    const isNewCategoryContext = categoryToFetch !== currentFetchedImageCategory;
+    const categoryToFetchDisplayName = getCategoryDisplayName(categoryToFetch);
+
+    // Check if all images for the current server category context are loaded
+    if (!isNewCategoryContext && allApiImagesLoaded && currentFetchedImageCategory !== null) { // Only check "All Loaded" if we are in a server context
+      const alertMessage = categoryToFetchDisplayName
+        ? `All images for category '${categoryToFetchDisplayName}' have been loaded.`
+        : "All general images from the server have been loaded.";
+      Alert.alert("All Loaded", alertMessage);
+      return;
+    }
+
     setIsFetchingImages(true);
     setSelectedImage(null); // Clear selected image
     setEnglishCaption("");  // Clear English caption
     setYorubaCaption(""); // Clear Yoruba caption
 
-    const offsetForThisFetch = 0;
-    setImagesOffset(0); // Reset offset for server fetch
-    setAllApiImagesLoaded(false); // Reset loaded flag for server fetch
+    // For "Fetch New Images", always start from offset 0 and reset relevant states.
+    let offsetForThisFetch = 0;
+    setImagesOffset(0); // Reset pagination offset
+    setAllApiImagesLoaded(false); // Assume more images might be available
+    setCurrentFetchedImageCategory(categoryToFetch); // Set the context for this fetch operation
 
     try {
-      const newImages = await fetchServerImageMetadata(IMAGES_PER_FETCH, offsetForThisFetch);
+      const newImages = await fetchServerImageMetadata(IMAGES_PER_FETCH, offsetForThisFetch, categoryToFetch);
       if (newImages.length > 0) {
-        setApiImages(newImages); // Replace current images with new server images
+        // Always replace images when "Fetch New Images" is clicked
+        setApiImages(newImages);
+        
         // Automatically select the first image from the newly fetched batch
-        console.log("[ImageCaptionScreen] Automatically selecting first fetched server image:", newImages[0]);
-        handleSelectImage(newImages[0]); 
+        if (newImages.length > 0) { 
+            console.log("[ImageCaptionScreen] Automatically selecting first fetched server image:", newImages[0]);
+            handleSelectImage(newImages[0]);
+        }
+        
         setImagesOffset(offsetForThisFetch + newImages.length);
         if (newImages.length < IMAGES_PER_FETCH) {
           setAllApiImagesLoaded(true); // Assume all are loaded if less than fetch limit
         } else {
            setAllApiImagesLoaded(false); // More might be available
         }
+        // Categories will now only be refreshed on initial load or by manual refresh icon press.
       } else {
-        setApiImages([]); // No images found on server
+        // No images found for this fetch, so clear the list.
+        if (offsetForThisFetch === 0) {
+            setApiImages([]);
+        }
         setAllApiImagesLoaded(true); // Consider all loaded if server returns empty
-        Alert.alert("No Images", "No images were found on the server.");
+        const alertTitle = offsetForThisFetch === 0 ? "No Images Found" : "No More Images";
+        const alertMessage = offsetForThisFetch === 0
+          ? `No images were found on the server${categoryToFetchDisplayName ? ` for category '${categoryToFetchDisplayName}'` : ''}.`
+          : `No new images were found on the server${categoryToFetchDisplayName ? ` for category '${categoryToFetchDisplayName}'` : ''}.`;
+        Alert.alert(alertTitle, alertMessage);
       }
     } catch (error) {
       console.error("Error fetching images from server:", error);
       Alert.alert("Error", "Could not fetch images from the server.");
       setApiImages([]); // Clear images on error
+      setAllApiImagesLoaded(false); // Ensure button is enabled after fetch error
+      setCurrentFetchedImageCategory(null); // Reset context on error
     } finally {
       setIsFetchingImages(false);
     }
@@ -221,16 +289,34 @@ export default function ImageCaptionScreen() {
 
 
 
-  const isGenerallyBusy = isGeneratingCaption || isTranslatingCaption || isFetchingImages || isSpeaking;
+  const isGenerallyBusy = isGeneratingCaption || isTranslatingCaption || isFetchingImages || isSpeaking || isFetchingImageCategories;
 
-  let fetchButtonTitle = "Fetch New Images From Server";
+  const targetImageCategoryForFetch = selectedImageCategory;
+  const displayImageCategoryContext = currentFetchedImageCategory;
+
+  let fetchButtonTitle = "Fetch Images From Server"; // Initial title
   if (isFetchingImages) {
-    fetchButtonTitle = "Fetching...";
+    const targetDisplayName = getCategoryDisplayName(targetImageCategoryForFetch);
+    fetchButtonTitle = `Fetching ${targetDisplayName ? `'${targetDisplayName}' ` : ''}Images...`;
+  } else {
+    const targetDisplayName = getCategoryDisplayName(targetImageCategoryForFetch);
+    // Only show "All Loaded" if we are in a server category context and all are loaded
+    if (allApiImagesLoaded && targetImageCategoryForFetch === displayImageCategoryContext && displayImageCategoryContext !== null) {
+       fetchButtonTitle = `All ${targetDisplayName ? `'${targetDisplayName}' ` : ''}Images Loaded`;
+    } else {
+       // Default title or title for fetching a new category / more images
+       fetchButtonTitle = `Fetch ${targetDisplayName ? `'${targetDisplayName}' ` : ''}Images From Server`;
+    }
   }
-  // Disable fetch button if any caption-related or image fetching operation is in progress.
-  const isFetchButtonDisabled = isFetchingImages || isGeneratingCaption || isTranslatingCaption;
-  
-  return (
+
+  const isFetchButtonDisabled =
+    isGenerallyBusy ||
+    (allApiImagesLoaded && targetImageCategoryForFetch === displayImageCategoryContext && displayImageCategoryContext !== null && !isFetchingImages); // Disable if all loaded for current server category context and not fetching
+
+
+  //console.log("[ImageCaptionScreen] Rendering. Current availableImageCategories state:", JSON.stringify(availableImageCategories, null, 2));
+  //console.log("[ImageCaptionScreen] Rendering. selectedImageCategory:", selectedImageCategory, "currentFetchedImageCategory:", currentFetchedImageCategory);
+    return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
       style={styles.keyboardAvoidingContainer}
@@ -241,6 +327,53 @@ export default function ImageCaptionScreen() {
           keyboardShouldPersistTaps="handled"
         >
           <Text style={styles.title}>Image Caption Generator</Text>
+
+          {/* Category Filter Section */}
+          <View style={styles.categorySelectionContainer}>
+            <Text style={styles.label}>Filter Images by Category (Optional):</Text>
+            <View style={styles.categoryHeader}>
+              <Pressable
+                onPress={() => handleRefreshImageCategories()}
+                disabled={isFetchingImageCategories || (isGenerallyBusy && !isFetchingImageCategories)}
+                style={({ pressed }) => [
+                  styles.refreshIconPressable,
+                  (isFetchingImageCategories || (isGenerallyBusy && !isFetchingImageCategories)) && styles.disabledButton,
+                  pressed && styles.refreshIconPressed,
+                ]}
+                accessibilityLabel="Refresh image categories"
+              >
+                {isFetchingImageCategories ? <ActivityIndicator size="small" color="#007AFF" /> : <Text style={styles.refreshIconText}>🔄</Text>}
+              </Pressable>
+            </View>
+
+            <View style={styles.categoryButtonsContainer}>
+              {isFetchingImageCategories && availableImageCategories.length === 0 ? <ActivityIndicator size="small" color="#0000ff" style={styles.loadingIndicator} /> : null}
+              {!isFetchingImageCategories && availableImageCategories.length === 0 && (
+                <Text style={styles.placeholderText}>No image categories available.</Text>
+              )}
+              {availableImageCategories.map(catInfo => (
+                <Pressable
+                  key={catInfo.value}
+                  style={[
+                    styles.categoryButton,
+                    selectedImageCategory === catInfo.value && styles.categoryButtonSelected,
+                    (isGenerallyBusy || isFetchingImageCategories) && styles.disabledButton
+                  ]}
+                  onPress={() => setSelectedImageCategory(prev => prev === catInfo.value ? null : catInfo.value)}
+                  disabled={isGenerallyBusy || isFetchingImageCategories}
+                >
+                  <Text style={selectedImageCategory === catInfo.value ? [styles.categoryButtonText, styles.categoryButtonTextSelected] : styles.categoryButtonText}>
+                    {catInfo.displayName}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {selectedImageCategory && (
+              <Pressable onPress={() => setSelectedImageCategory(null)} style={[styles.clearCategoryButton, (isGenerallyBusy || isFetchingImageCategories) && styles.disabledButton]} disabled={isGenerallyBusy || isFetchingImageCategories}>
+                <Text style={styles.clearCategoryButtonText}>Clear Selected Category</Text>
+              </Pressable>
+            )}
+          </View>
 
           <View style={styles.fetchButtonContainer}>
             <Button
@@ -395,6 +528,39 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     marginBottom: 20,
   },
+  // Styles from SentenceBuilderScreen, adapted for ImageCaptionScreen
+  categorySelectionContainer: {
+    width: '100%',
+    marginBottom: 15,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 5,
+    backgroundColor: '#f9f9f9',
+  },
+  categoryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginBottom: 10,
+    alignItems: 'center',
+    height: 40,
+  },
+  refreshIconPressable: {
+    padding: 5,
+  },
+  refreshIconPressed: {
+    opacity: 0.6,
+  },
+  refreshIconText: { // For using a text character as refresh icon
+    fontSize: 24,
+    color: "#007AFF",
+  },
+  categoryButtonsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-start',
+    marginTop: 5,
+  },
   label: {
     fontSize: 16,
     fontWeight: "bold",
@@ -405,6 +571,27 @@ const styles = StyleSheet.create({
   fetchButtonContainer: {
     width: '100%',
     marginBottom: 15,
+  },
+  categoryButton: {
+    backgroundColor: '#f0f0f0',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    marginRight: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#ccc',
+  },
+  categoryButtonSelected: {
+    backgroundColor: '#007AFF',
+    borderColor: '#0056b3',
+  },
+  categoryButtonText: {
+    fontSize: 14,
+    color: '#333',
+  },
+  categoryButtonTextSelected: {
+    color: '#fff',
   },
   imageGalleryContainer: {
     flexDirection: 'row',
@@ -495,11 +682,12 @@ const styles = StyleSheet.create({
   placeholderText: {
     textAlign: 'center',
     color: '#888',
-    marginVertical: 20,
+    marginVertical: 10, // Adjusted from 20 to be less dominant when categories are empty
     fontSize: 15,
   },
   loadingIndicator: {
-    marginVertical: 20,
+    marginVertical: 10, // Adjusted from 20
+    alignSelf: 'center',
   },
   loadingIndicatorInScroll: { // For when loader is inside the scroll area
     flex: 1, // Take up space if it's the only item
@@ -514,6 +702,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     // backgroundColor: 'rgba(0,0,0,0.05)', // Uncomment to debug touch area
+  },
+  clearCategoryButton: { // Copied from SentenceBuilderScreen
+    marginTop: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    alignSelf: 'flex-start',
+  },
+  clearCategoryButtonText: { // Copied from SentenceBuilderScreen
+    color: '#007AFF',
+    fontSize: 14,
   },
   scrollArrowText: {
     fontSize: 24, // Adjusted for smaller arrow area
