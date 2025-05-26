@@ -1,3 +1,4 @@
+
 import { translateToYorubaAPI } from "@/src/services/translationApiService";
 import React, { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Button, Keyboard, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
@@ -27,21 +28,8 @@ export default function SentenceBuilderScreen() {
   const { isSpeaking, playSound } = useAudioPlayer();
 
   useEffect(() => {
-    // Fetch available categories from the server
-    const loadCategories = async () => {
-      setIsFetchingCategories(true);
-      try {
-        const fetchedCategories = await fetchAvailableCategories();
-        setAvailableCategories(fetchedCategories);
-      } catch (error) {
-        console.error("[SentenceBuilderScreen] Failed to fetch categories:", error);
-        Alert.alert("Error", "Could not load sentence categories from the server. Please check your connection or try again later.");
-        setAvailableCategories([]); // Fallback to empty list
-      } finally {
-        setIsFetchingCategories(false);
-      }
-    };
-    loadCategories();
+    // Initial load of categories
+    handleRefreshCategories(true);
 
     const loadInitialLocalSentences = async () => {
       setIsFetchingSentences(true);
@@ -103,6 +91,27 @@ export default function SentenceBuilderScreen() {
     return foundCategory ? foundCategory.displayName : value; // Fallback to value if not found
   }, [availableCategories]);
 
+  const handleRefreshCategories = async (isInitialLoad = false) => {
+    if (isFetchingCategories && !isInitialLoad) return; // Prevent multiple simultaneous fetches unless it's the initial load
+
+    setIsFetchingCategories(true);
+    try {
+      console.log("[SentenceBuilderScreen] handleRefreshCategories: Fetching new categories...");
+      const fetchedCategories = await fetchAvailableCategories();
+      //console.log("[SentenceBuilderScreen] handleRefreshCategories: Fetched new categories data:", JSON.stringify(fetchedCategories, null, 2));
+      setAvailableCategories(fetchedCategories);
+      if (!isInitialLoad) {
+        Alert.alert("Categories Refreshed", "The list of categories has been updated.");
+      }
+    } catch (error) {
+      console.error("[SentenceBuilderScreen] Failed to refresh categories:", error);
+      Alert.alert("Error", "Could not refresh sentence categories. Please check your connection or try again later.");
+      // Optionally, you might want to clear categories or leave them as they were: setAvailableCategories([]);
+    } finally {
+      setIsFetchingCategories(false);
+    }
+  };
+
   const handleFetchApiSentences = async () => {
     if (isFetchingSentences) return;
 
@@ -141,7 +150,6 @@ export default function SentenceBuilderScreen() {
     try {
       console.log(`[SentenceBuilderScreen] Attempting to fetch sentences with category: ${categoryToFetch}, offset: ${offsetForThisFetch}`);
       const newSentences = await fetchServerSentences(SENTENCES_PER_FETCH, offsetForThisFetch, categoryToFetch);
-      // This is the log you mentioned might be missing. If it is, an error likely occurred above.
       console.log("[SentenceBuilderScreen] handleFetchApiSentences: Received newSentences from API:", JSON.stringify(newSentences, null, 2));
       setCurrentSentenceSource('server');
 
@@ -164,7 +172,6 @@ export default function SentenceBuilderScreen() {
         Alert.alert(alertTitle, alertMessage);
       }
     } catch (error) {
-      // If the "Received newSentences" log above is missing, this error log should appear.
       console.error("[SentenceBuilderScreen] Error fetching API sentences:", error);
       Alert.alert("Error", "Could not fetch sentences from the server. Check console for details.");
       if (shouldClearPreviousSentences) setApiSentences([]);
@@ -216,6 +223,7 @@ export default function SentenceBuilderScreen() {
       targetCategoryForFetch === displayCategoryContext &&
       allApiSentencesLoaded);
 
+  //console.log("[SentenceBuilderScreen] Rendering. Current availableCategories state:", JSON.stringify(availableCategories, null, 2));
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === "ios" ? "padding" : "height"}
@@ -230,24 +238,32 @@ export default function SentenceBuilderScreen() {
 
           <View style={styles.categorySelectionContainer}>
             <Text style={styles.label}>Filter by Category (Optional):</Text>
+            <View style={styles.categoryHeader}>
+              <Button
+                title={isFetchingCategories ? "Refreshing..." : "Refresh Categories"}
+                onPress={() => handleRefreshCategories()}
+                disabled={isFetchingCategories || (isGenerallyBusy && !isFetchingCategories)}
+              />
+            </View>
+
             <View style={styles.categoryButtonsContainer}>
-              {isFetchingCategories && <ActivityIndicator size="small" color="#0000ff" style={styles.loadingIndicator} />}
+              {isFetchingCategories && availableCategories.length === 0 && <ActivityIndicator size="small" color="#0000ff" style={styles.loadingIndicator} />}
               {!isFetchingCategories && availableCategories.length === 0 && (
                 <Text style={styles.placeholderText}>No categories available.</Text>
               )}
-              {!isFetchingCategories && availableCategories.map(catInfo => (
+              {availableCategories.map(catInfo => ( // Display categories even if isFetchingCategories is true (for subsequent refreshes)
                 <Pressable
                   key={catInfo.value}
                   style={[
                     styles.categoryButton,
                     selectedCategory === catInfo.value && styles.categoryButtonSelected,
-                    isGenerallyBusy && styles.disabledButton
+                    (isGenerallyBusy || isFetchingCategories) && styles.disabledButton // Disable individual buttons if generally busy or specifically fetching categories
                   ]}
                   onPress={() => {
                      console.log("[SentenceBuilderScreen] Category selected/deselected. Value:", catInfo.value);
                      setSelectedCategory(prev => prev === catInfo.value ? null : catInfo.value);
                   }}
-                  disabled={isGenerallyBusy}
+                  disabled={isGenerallyBusy || isFetchingCategories} // Overall disable if busy
                 >
                   <Text style={
                     selectedCategory === catInfo.value
@@ -265,8 +281,8 @@ export default function SentenceBuilderScreen() {
                   console.log("[SentenceBuilderScreen] Clearing selected category.");
                   setSelectedCategory(null);
                 }}
-                style={[styles.clearCategoryButton, isGenerallyBusy && styles.disabledButton]}
-                disabled={isGenerallyBusy}
+                style={[styles.clearCategoryButton, (isGenerallyBusy || isFetchingCategories) && styles.disabledButton]}
+                disabled={isGenerallyBusy || isFetchingCategories}
               >
                 <Text style={styles.clearCategoryButtonText}>Clear Selected Category</Text>
               </Pressable>
@@ -365,6 +381,12 @@ const styles = StyleSheet.create({
     borderRadius: 5,
     backgroundColor: '#f9f9f9',
   },
+  categoryHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end', // Aligns button to the right
+    marginBottom: 10, // Space below the refresh button
+    alignItems: 'center',
+  },
   categoryButtonsContainer: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -439,7 +461,7 @@ const styles = StyleSheet.create({
   placeholderText: {
     textAlign: 'center',
     color: '#888',
-    marginVertical: 10, // Reduced margin a bit
+    marginVertical: 10,
     fontSize: 15,
   },
   outputContainer: {
@@ -476,5 +498,6 @@ const styles = StyleSheet.create({
   },
   loadingIndicator: {
     marginVertical: 10,
+    alignSelf: 'center', // Center the indicator if it's the only thing
   }
 });
