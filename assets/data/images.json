@@ -1,0 +1,37 @@
+[
+  {
+    "id": "local_img_001",
+    "image_key": "Bird",
+    "english_caption": "bird",
+    "asset_filename": "assets/images/animals_bird.png",
+    "category": "animals"
+  },
+  {
+    "id": "local_img_002",
+    "image_key": "Cat",
+    "english_caption": "cat",
+    "asset_filename": "assets/images/animals_cat.png",
+    "category": "animals"
+  },
+  {
+    "id": "local_img_003",
+    "image_key": "Dog",
+    "english_caption": "dog",
+    "asset_filename": "assets/images/animals_dog.png",
+    "category": "animals"
+  },
+  {
+    "id": "local_img_004",
+    "image_key": "Ears",
+    "english_caption": "ears",
+    "category": "body_parts",
+    "asset_filename": "assets/images/body_parts_ears.png" 
+  },
+  {
+    "id": "local_img_005",
+    "image_key": "Hands",
+    "english_caption": "hands",
+    "category": "body_parts",
+    "asset_filename": "assets/images/body_parts_hands.png"
+  }
+]

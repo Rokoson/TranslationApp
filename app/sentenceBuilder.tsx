@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Button, Keyboard, KeyboardAvoidingView, Platf
 
 import { useAudioPlayer } from "@/src/hooks/useAudioPlayer";
 import { CategoryInfo, fetchAvailableCategories, fetchServerSentences, ServerSentence } from "@/src/services/contentApiService";
+import { Ionicons } from '@expo/vector-icons'; // Import an icon set
 
 // --- Backend API Configuration ---
 //const BACKEND_BASE_URL = "http://127.0.0.1:5005"; // Make sure this is correct!
@@ -100,9 +101,9 @@ export default function SentenceBuilderScreen() {
       const fetchedCategories = await fetchAvailableCategories();
       //console.log("[SentenceBuilderScreen] handleRefreshCategories: Fetched new categories data:", JSON.stringify(fetchedCategories, null, 2));
       setAvailableCategories(fetchedCategories);
-      if (!isInitialLoad) {
-        Alert.alert("Categories Refreshed", "The list of categories has been updated.");
-      }
+      // if (!isInitialLoad) { // Removed the alert
+      //   Alert.alert("Categories Refreshed", "The list of categories has been updated.");
+      // }
     } catch (error) {
       console.error("[SentenceBuilderScreen] Failed to refresh categories:", error);
       Alert.alert("Error", "Could not refresh sentence categories. Please check your connection or try again later.");
@@ -239,11 +240,18 @@ export default function SentenceBuilderScreen() {
           <View style={styles.categorySelectionContainer}>
             <Text style={styles.label}>Filter by Category (Optional):</Text>
             <View style={styles.categoryHeader}>
-              <Button
-                title={isFetchingCategories ? "Refreshing..." : "Refresh Categories"}
+              <Pressable
                 onPress={() => handleRefreshCategories()}
                 disabled={isFetchingCategories || (isGenerallyBusy && !isFetchingCategories)}
-              />
+                style={({ pressed }) => [
+                  styles.refreshIconPressable,
+                  (isFetchingCategories || (isGenerallyBusy && !isFetchingCategories)) && styles.disabledButton,
+                  pressed && styles.refreshIconPressed,
+                ]}
+                accessibilityLabel="Refresh categories"
+              >
+                {isFetchingCategories ? <ActivityIndicator size="small" color="#007AFF" /> : <Ionicons name="refresh-circle-outline" size={28} color="#007AFF" />}
+              </Pressable>
             </View>
 
             <View style={styles.categoryButtonsContainer}>
@@ -386,6 +394,13 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end', // Aligns button to the right
     marginBottom: 10, // Space below the refresh button
     alignItems: 'center',
+    height: 40, // Ensure consistent height for the header area
+  },
+  refreshIconPressable: {
+    padding: 5, // Add some padding around the icon for easier pressing
+  },
+  refreshIconPressed: {
+    opacity: 0.6, // Visual feedback when pressed
   },
   categoryButtonsContainer: {
     flexDirection: 'row',
