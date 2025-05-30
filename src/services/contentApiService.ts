@@ -1,6 +1,6 @@
-import { Alert } from 'react-native';
 // Assuming you have a central config for your backend URL
-import { BACKEND_BASE_URL } from '../config/apiConfig'; // Adjust path if your apiConfig is elsewhere
+import { BACKEND_BASE_URL } from '@/src/config/apiConfig'; // Adjust path if your apiConfig is elsewhere
+import { ConfigurationError, makeApiRequest } from '@/src/utils/apiUtils'; // Import from new location
 
 // Interface for the metadata of images fetched from the server
 export interface ServerImageMetadata {
@@ -25,29 +25,18 @@ export interface CategoryInfo {
   displayName: string;  // The user-friendly name for display (e.g., "Common Phrases")
 }
 
+// Export ConfigurationError so UI can catch it specifically if needed
+export { ConfigurationError };
 
 /**
  * Fetches image metadata from the server.
  * The component will then construct the full image URL.
  */
 export const fetchServerImageMetadata = async (limit: number, offset: number, category?: string | null): Promise<ServerImageMetadata[]> => {
-  if (BACKEND_BASE_URL === "BACKEND_BASE_URL" || !BACKEND_BASE_URL) { // Added check for unconfigured URL
-    Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL.");
-    throw new Error("Backend URL not configured.");
-  }
+  const queryParams = { limit, offset, filter_term: category };
 
-  let apiUrl = `${BACKEND_BASE_URL}/api/image_metadata?limit=${limit}&offset=${offset}`;
-  if (category) {
-    apiUrl += `&filter_term=${encodeURIComponent(category)}`;
-  }
-  console.log(`[contentApiService] fetchServerImageMetadata: Fetching from ${apiUrl}`);
   try {
-    const response = await fetch(apiUrl);
-    if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorData}`);
-    }
-    const metadataList: ServerImageMetadata[] = await response.json();
+    const metadataList = await makeApiRequest<ServerImageMetadata[]>('/api/image_metadata', undefined, queryParams);
     console.log("[contentApiService] fetchServerImageMetadata: Received metadata:", metadataList);
 
     // Filter for valid data first
@@ -63,7 +52,7 @@ export const fetchServerImageMetadata = async (limit: number, offset: number, ca
       url: `${BACKEND_BASE_URL}/api/images/${encodeURIComponent(meta.asset_filename)}`
     }));
 
-  } catch (error) {
+  } catch (error) { // Catching potential errors from makeApiRequest or subsequent processing
     console.error("[contentApiService] fetchServerImageMetadata: Error fetching image metadata:", error);
     throw error; // Re-throw to be handled by the caller
   }
@@ -77,68 +66,23 @@ export const fetchServerSentences = async (
   offset: number,
   category?: string | null
 ): Promise<ServerSentence[]> => {
-  if (BACKEND_BASE_URL === "BACKEND_BASE_URL" || !BACKEND_BASE_URL) {
-    Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL.");
-    throw new Error("Backend URL not configured.");
-  }
-  let apiUrl = `${BACKEND_BASE_URL}/api/sentences?limit=${limit}&offset=${offset}`;
-  if (category) {
-    apiUrl += `&filter_term=${encodeURIComponent(category)}`; // Assuming backend uses 'filter_term'
-  }
-  console.log(`[contentApiService] fetchServerSentences: Fetching from ${apiUrl}`);
-  try {
-    const response = await fetch(apiUrl);
-    if (!response.ok) {
-      const errorData = await response.text();
-      throw new Error(`HTTP error! status: ${response.status}, message: ${errorData}`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("[contentApiService] fetchServerSentences: Error fetching sentences:", error);
-    throw error; // Re-throw to be handled by the caller
-  }
+  const queryParams = { limit, offset, filter_term: category };
+  // Assuming backend uses 'filter_term' for category filtering
+  return makeApiRequest<ServerSentence[]>('/api/sentences', undefined, queryParams);
 };
 
 /**
  * Fetches available sentence categories from the server.
  */
 export const fetchAvailableCategories = async (): Promise<CategoryInfo[]> => {
-  if (BACKEND_BASE_URL === "BACKEND_BASE_URL" || !BACKEND_BASE_URL) {
-    Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL.");
-    throw new Error("Backend URL not configured.");
-  }
-  const apiUrl = `${BACKEND_BASE_URL}/api/sentence-categories`; // Adjust endpoint if different
-  console.log(`[contentApiService] fetchAvailableCategories: Fetching from ${apiUrl}`);
-  try {
-    const response = await fetch(apiUrl);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("[contentApiService] fetchAvailableCategories: Error fetching categories:", error);
-    throw error; // Re-throw to be handled by the caller
-  }
+  // Adjust endpoint if different, e.g., '/api/categories/sentence'
+  return makeApiRequest<CategoryInfo[]>('/api/sentence-categories');
 };
 
 /**
  * Fetches available image categories from the server.
  */
 export const fetchAvailableImageCategories = async (): Promise<CategoryInfo[]> => {
-  if (BACKEND_BASE_URL === "BACKEND_BASE_URL" || !BACKEND_BASE_URL) {
-    Alert.alert("Configuration Needed", "Please set your BACKEND_BASE_URL.");
-    throw new Error("Backend URL not configured.");
-  }
-  const apiUrl = `${BACKEND_BASE_URL}/api/image-categories`; // Endpoint for image categories
-  console.log(`[contentApiService] fetchAvailableImageCategories: Fetching from ${apiUrl}`);
-  try {
-    const response = await fetch(apiUrl);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("[contentApiService] fetchAvailableImageCategories: Error fetching image categories:", error);
-    throw error; // Re-throw to be handled by the caller
-  }
+  // Adjust endpoint if different, e.g., '/api/categories/image'
+  return makeApiRequest<CategoryInfo[]>('/api/image-categories');
 };

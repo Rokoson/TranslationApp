@@ -1,33 +1,43 @@
-import { TTS_API_ENDPOINT } from '../config/apiConfig';
-import { pcmToWavBase64 } from '../utils/audioUtils';
+import { TTS_API_ENDPOINT } from '@/src/config/apiConfig';
+import { makeApiRequest } from '@/src/utils/apiUtils'; // Import from new location
+import { pcmToWavBase64 } from '@/src/utils/audioUtils';
+
+// Define more specific types for the expected TTS API response structures
+interface TtsResponseArray extends Array<number[] | number> {
+  0: number[]; // pcmDataFloats
+  1: number;   // sampleRate
+}
+
+interface TtsResponseObject {
+  audio?: number[];
+  audio_data?: number[];
+  data?: number[];
+  sample_rate?: number;
+  rate?: number;
+}
+
+type TtsApiResponse = TtsResponseArray | TtsResponseObject;
 
 export const speakYorubaTextAPI = async (text: string): Promise<string | null> => {
   if (!text.trim()) {
-    return "No text to speak.";
+    throw new Error("Input text cannot be empty for text-to-speech.");
   }
   console.log(`TTS API CALL: Requesting speech for "${text}" from ${TTS_API_ENDPOINT}`);
 
   try {
-    const response = await fetch(TTS_API_ENDPOINT, {
+    const requestOptions: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         // Add any necessary auth headers for your TTS API
       },
       body: JSON.stringify({
-        text: text,
-        //language: 'yo', // Yoruba language code
+        text: text, // language: 'yo', // Yoruba language code
         // Add other parameters your TTS API might need (e.g., voice, speed)
       }),
-    });
+    };
 
-    if (!response.ok) {
-      const errorData = await response.text();
-      console.error("TTS API Error Response:", errorData);
-      throw new Error(`TTS API request failed: ${response.status} - ${response.statusText}`);
-    }
-
-    const jsonData = await response.json();
+    const jsonData = await makeApiRequest<TtsApiResponse>(TTS_API_ENDPOINT, requestOptions);
     console.log("TTS API JSON Data received:", JSON.stringify(jsonData));
 
     let pcmDataFloats: number[] | undefined;
@@ -36,9 +46,10 @@ export const speakYorubaTextAPI = async (text: string): Promise<string | null> =
     if (Array.isArray(jsonData) && jsonData.length === 2) {
       pcmDataFloats = jsonData[0] as number[];
       sampleRate = jsonData[1] as number;
-    } else if (typeof jsonData === 'object' && jsonData !== null) {
-      pcmDataFloats = (jsonData as any).audio || (jsonData as any).audio_data || (jsonData as any).data;
-      sampleRate = (jsonData as any).sample_rate || (jsonData as any).rate;
+    } else if (typeof jsonData === 'object' && jsonData !== null && !Array.isArray(jsonData)) {
+      // jsonData is TtsResponseObject
+      pcmDataFloats = jsonData.audio || jsonData.audio_data || jsonData.data;
+      sampleRate = jsonData.sample_rate || jsonData.rate;
     }
     
     if (!pcmDataFloats || !Array.isArray(pcmDataFloats) || typeof sampleRate !== 'number') {
@@ -48,6 +59,6 @@ export const speakYorubaTextAPI = async (text: string): Promise<string | null> =
     return pcmToWavBase64(pcmDataFloats, sampleRate);
   } catch (error) {
     console.error("Error during TTS API call:", error);
-    return `Error getting speech: ${error instanceof Error ? error.message : "Unknown error"}`;
+    throw error; // Re-throw the error to be handled by the caller
   }
 };

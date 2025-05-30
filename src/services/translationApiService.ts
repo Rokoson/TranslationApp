@@ -1,13 +1,15 @@
 import { TRANSLATE_API_ENDPOINT } from '@/src/config/apiConfig';
+import { makeApiRequest } from '@/src/utils/apiUtils'; // Import from new location
 
 export const translateToYorubaAPI = async (text: string): Promise<string> => {
   if (!text.trim()) {
-    return "";
+    // Throw an error for invalid input
+    throw new Error("Input text cannot be empty for translation.");
   }
   console.log(`API CALL: Translating "${text}" to Yoruba using ${TRANSLATE_API_ENDPOINT}`);
 
   try {
-    const response = await fetch(TRANSLATE_API_ENDPOINT, {
+    const requestOptions: RequestInit = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -15,24 +17,21 @@ export const translateToYorubaAPI = async (text: string): Promise<string> => {
         // 'Authorization': 'Bearer YOUR_API_KEY',
       },
       body: JSON.stringify({
-        text: text,       // The text to translate
+        text: text,        // The text to translate
         source_lang: 'EN', // Source language
         target_lang: 'YO', // Target language (Yoruba)
       }),
-    });
+    };
 
-    if (!response.ok) {
-      const errorData = await response.text(); // Or response.json() if error details are in JSON
-      console.error("API Error Response:", errorData);
-      throw new Error(`API request failed: ${response.status} - ${response.statusText}`);
+    // Assuming TRANSLATE_API_ENDPOINT is a full URL
+    const data = await makeApiRequest<{ translated_text?: string }>(TRANSLATE_API_ENDPOINT, requestOptions);
+    const translatedText = data?.translated_text;
+    if (typeof translatedText !== 'string') { // Check if it's a string, could be empty which is valid
+      throw new Error(`Translated text not found or invalid in API response for "${text}".`);
     }
-
-    const data = await response.json();
-    const translatedText = data.translated_text;
-    
-    return translatedText || `Error: Could not find translation in response for "${text}"`;
+    return translatedText;
   } catch (error) {
     console.error("Error during translation API call:", error);
-    return `Error translating: ${error instanceof Error ? error.message : "Unknown error"}`;
+    throw error; // Re-throw the error to be handled by the caller
   }
 };
