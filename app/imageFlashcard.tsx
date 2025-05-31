@@ -333,26 +333,33 @@ export default function ImageFlashcardScreen() {
           {currentFlashcardItem && (
             <Pressable onPress={handleFlipCard} style={styles.flashcardContainer}>
               {!isCardFlipped ? (
-                (() => {
-                  const source = currentFlashcardItem.resolvedSource
-                    ? currentFlashcardItem.resolvedSource
-                    : (currentFlashcardItem.url ? { uri: currentFlashcardItem.url } : null);
-                  if (source) {
+                <View style={styles.flashcardFrontContent}>
+                  {(() => {
+                    const source = currentFlashcardItem.resolvedSource
+                      ? currentFlashcardItem.resolvedSource
+                      : (currentFlashcardItem.url ? { uri: currentFlashcardItem.url } : null);
+                    if (source) {
+                      return (
+                        <Image
+                          source={source}
+                          style={styles.flashcardImage}
+                          contentFit="contain"
+                          onError={(e) => console.error("Image load error:", e.nativeEvent.error)}
+                        />
+                      );
+                    }
                     return (
-                      <Image
-                        source={source}
-                        style={styles.flashcardImage}
-                        contentFit="contain"
-                        onError={(e) => console.error("Image load error:", e.nativeEvent.error)}
-                      />
+                      <View style={[styles.flashcardImage, styles.imagePlaceholder]}>
+                        <Text style={styles.imagePlaceholderText}>No Image</Text>
+                      </View>
                     );
-                  }
-                  return (
-                    <View style={[styles.flashcardImage, styles.imagePlaceholder]}>
-                      <Text style={styles.imagePlaceholderText}>No Image</Text>
-                    </View>
-                  );
-                })()
+                  })()}
+                  {currentFlashcardItem.english_caption && (
+                    <Text style={styles.flashcardEnglishCaption} numberOfLines={2} ellipsizeMode="tail">
+                      {currentFlashcardItem.english_caption}
+                    </Text>
+                  )}
+                </View>
               ) : (
                 <View style={styles.flashcardBack}>
                   {isTranslatingName ? (
@@ -481,9 +488,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     overflow: 'hidden',
   },
-  flashcardImage: {
+  flashcardFrontContent: {
+    flex: 1,
+    justifyContent: 'center', // Distribute space if needed, or use 'flex-start' / 'space-between'
+    alignItems: 'center',
     width: '100%',
-    height: '100%',
+    padding: 10, // Add some padding around the content
+  },
+  flashcardImage: {
+    width: '95%', // Make image a bit wider
+    height: '80%', // Increase height to make image larger, leaving space for caption
+    marginBottom: 10, // Space between image and caption
+  },
+  flashcardEnglishCaption: {
+    fontSize: 18,
+    fontWeight: '500',
+    textAlign: 'center',
+    color: '#333', // Dark grey color for the caption
   },
   flashcardBack: {
     flex: 1,
