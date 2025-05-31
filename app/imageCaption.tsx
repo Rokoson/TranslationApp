@@ -19,11 +19,11 @@ const IMAGES_PER_FETCH = 10; // Define how many images to fetch at once
 // This ensures React Native's bundler correctly handles these static assets.
 // IMPORTANT: Update this map if you add or change local images in images.json
 const localImageSources: { [key: string]: ReturnType<typeof require> } = {
-  "assets/images/animals_bird.png": require('../assets/images/animals_bird.png'),
-  "assets/images/animals_cat.png": require('../assets/images/animals_cat.png'),
-  "assets/images/animals_dog.png": require('../assets/images/animals_dog.png'),
-  "assets/images/body_parts_ears.png": require('../assets/images/body_parts_ears.png'),
-  "assets/images/body_parts_hands.png": require('../assets/images/body_parts_hands.png'),
+  "assets/images/animals_bird.png": require('@/assets/images/animals_bird.png'),
+  "assets/images/animals_cat.png": require('@/assets/images/animals_cat.png'),
+  "assets/images/animals_dog.png": require('@/assets/images/animals_dog.png'),
+  "assets/images/body_parts_ears.png": require('@/assets/images/body_parts_ears.png'),
+  "assets/images/body_parts_hands.png": require('@/assets/images/body_parts_hands.png'),
   // Add other local images here, matching the 'asset_filename' in images.json
 };
 

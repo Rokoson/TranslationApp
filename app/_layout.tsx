@@ -26,6 +26,10 @@ export default function RootLayout() {
         name="sentenceBuilder" // This will refer to app/sentenceBuilder.tsx
         options={{ title: "Sentence Builder" }}
       />
+  <Stack.Screen
+    name="imageFlashcard" // This refers to app/imageFlashcard.tsx
+    options={{ title: "Image Flashcards" }}
+  />
     </Stack>
   );
 }
