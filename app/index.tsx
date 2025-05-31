@@ -32,6 +32,12 @@ export default function HomeScreen() {
           <Text style={styles.navButtonText}>Image Flashcards</Text>
         </Pressable>
       </Link>
+
+      <Link href="/sentenceFlashcard" asChild>
+        <Pressable style={styles.navButton}>
+          <Text style={styles.navButtonText}>Sentence Flashcards</Text>
+        </Pressable>
+      </Link>
     </View>
   );
 }
